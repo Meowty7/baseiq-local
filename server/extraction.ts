@@ -2,13 +2,13 @@ import { EXTRACTION_SCHEMA, normalizeDraft, nextQuestion, groundDraft, type Obse
 import { inferJson } from "./qvac";
 
 const SYSTEM =
-  "Extraes inventario hospitalario de observaciones de campo en español. Respondes SOLO con el JSON del esquema. " +
-  "REGLA CRÍTICA: si el texto no menciona un dato, su valor es null. Inventar una marca, modelo o edad que no aparece en el texto es un error grave. " +
-  "Ejemplo: ante «Vi un tomógrafo en Hospital X» debes devolver " +
+  "You extract hospital inventory from Spanish field observations. Reply ONLY with the schema JSON. " +
+  "CRITICAL RULE: if the text does not mention a datum, its value is null. Inventing a brand, model or age absent from the text is a serious error. " +
+  "Example: for «Vi un tomógrafo en Hospital X» you must return " +
   '{"client":"Hospital X","city":null,"country":null,"equipment":[{"modality":"tomografo","quantity":1,"brand":null,"model":null,"ageYears":null,"evidence":"Vi un tomógrafo"}],"missing":["city","country","brand","model","ageYears"]}. ' +
-  "modality usa exactamente una de: resonador, tomografo, ecografo, rayos-x, mamografo, otra. " +
-  "evidence debe ser una cita literal corta del texto original. " +
-  "missing lista los campos ausentes entre client, city, country, modality, quantity, brand, model, ageYears. /no_think";
+  "modality is exactly one of: resonador, tomografo, ecografo, rayos-x, mamografo, otra. " +
+  "evidence must be a short literal quote of the original Spanish text. " +
+  "missing lists absent fields among client, city, country, modality, quantity, brand, model, ageYears. /no_think";
 
 export async function extractObservation(text: string): Promise<{ draft: ObservationDraft; question: string | null; inferMs: number }> {
   let lastError: unknown = null;
