@@ -5,8 +5,8 @@ import { inferJson } from "./qvac";
 const SYSTEM =
   "Extract inventory. JSON only. No invent. Absent field = null. Keep original names. " +
   "modality: MRI | CT | ultrasound | X-ray | mammograph | other. evidence: short quote. " +
-  "client = named hospital/clinic. clinic of city only = null. " +
-  'in: I saw CT at Hospital X  out: {"client":"Hospital X","city":null,"country":null,"equipment":[{"modality":"CT","quantity":1,"brand":null,"model":null,"ageYears":null,"evidence":"I saw CT"}],"missing":["city","country","brand","model","ageYears"]} ' +
+  "client = named hospital/clinic from input. clinic of city only = null. NEVER invent client names or copy examples. " +
+  'in: I saw CT at Saint Jude  out: {"client":"Saint Jude","city":null,"country":null,"equipment":[{"modality":"CT","quantity":1,"brand":null,"model":null,"ageYears":null,"evidence":"I saw CT"}],"missing":["city","country","brand","model","ageYears"]} ' +
   "/no_think";
 
 export async function extractObservation(text: string): Promise<{ draft: ObservationDraft; question: string | null; inferMs: number }> {

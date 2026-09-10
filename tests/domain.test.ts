@@ -219,4 +219,28 @@ describe("rescueClient", () => {
       expect(d.client).toBeNull();
     }
   });
+
+  test("anula cliente alucinado del prompt que no está en el texto", () => {
+    const src = "Estoy en la Cl[inica hospital de san fernando en panama. Tienen 5 tomografos.";
+    const d = groundDraft(normalizeDraft({
+      client: "Hospital X", city: "Panamá", country: "Panamá", equipment: [], missing: [],
+    }), src);
+    expect(d.client).toBe("Clinica Hospital de San Fernando");
+  });
+
+  test("maneja notas complejas sin robar cantidades ni edad entre modalidades", () => {
+    const src = "Estoy en la Cl[inica hospital de san fernando en panama, tienen 5 tomografos, 2 tomografos y 1 tomografo, 5 mamografos nuevos, uno de los tomografos me comentaron despues que esta obsoleto, tinene varios equipos de rayos X";
+    const d = groundDraft(normalizeDraft({
+      client: null, city: "Panama", country: "Panama", equipment: [], missing: [],
+    }), src);
+    expect(d.client).toBe("Clinica Hospital de San Fernando");
+    const ct = d.equipment.find((e) => e.modality === "tomografo");
+    const mam = d.equipment.find((e) => e.modality === "mamografo");
+    const rx = d.equipment.find((e) => e.modality === "rayos-x");
+    expect(ct?.quantity).toBe(5);
+    expect(ct?.ageYears).toBeNull();
+    expect(mam?.quantity).toBe(5);
+    expect(mam?.ageYears).toBe(0);
+    expect(rx?.quantity).toBeNull();
+  });
 });

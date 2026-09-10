@@ -298,7 +298,7 @@ const ES_TO_EN: [RegExp, string][] = [
 ];
 
 export function toEnglishObservation(text: string): string {
-  let out = text;
+  let out = text.replace(/[\[\]{}]/g, "");
   for (const [re, en] of ES_TO_EN) out = out.replace(re, en);
   out = out.replace(/ de (?=\d|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|about|more)/gi, " of ");
   return out.replace(/[ \t]+/g, " ").trim();
@@ -343,7 +343,7 @@ function stripAccents(s: string): string {
   return s.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
 }
 
-function acceptClient(raw: string | null): string | null {
+function acceptClient(raw: string | null, sourceText?: string): string | null {
   if (!raw) return null;
   const name = raw.split(",")[0].trim();
   if (name.length === 0 || name.length > 60) return null;
@@ -357,6 +357,11 @@ function acceptClient(raw: string | null): string | null {
   const link = stripAccents(words[0]);
   if ((link === "de" || link === "of") && words.length === 2 && !isArticle(words[1])) return null;
   if (content[0][0] !== content[0][0].toUpperCase()) return null;
+  if (sourceText) {
+    const cleanSource = ` ${stripAccents(sourceText).replace(/[^a-z0-9]/g, " ")} `;
+    const core = content.map((w) => stripAccents(w));
+    if (core.length > 0 && !core.some((w) => cleanSource.includes(` ${w} `))) return null;
+  }
   return name;
 }
 
@@ -377,8 +382,8 @@ function sentencesFor(modality: Modality | null, sourceText: string): string {
   if (!modality) return "";
   const kw = MODALITY_KEYWORDS.find(([, m]) => m === modality)?.[0];
   if (!kw) return "";
-  return sourceText
-    .split(/[.!?]+/)
+  const chunks = sourceText.includes(".") ? sourceText.split(/[.!?]+/) : sourceText.split(/[,;]+/);
+  return chunks
     .filter((s) => new RegExp(kw.source, "i").test(s))
     .join(" ");
 }
@@ -402,11 +407,16 @@ function nearestModalityAt(low: string, pos: number): Modality | null {
 }
 
 function rescueClient(sourceText: string): string | null {
-  const m = sourceText.match(
+  const clean = sourceText.replace(/[\[\]{}()]/g, "");
+  const m = clean.match(
     /(hospital|cl[ií]nica|clinic|centro m[eé]dico|policl[ií]nica|sanatorio|centro)\s+([^,.;]+?)(?:,|\.| en | hay |$)/i,
   );
   if (!m?.[1] || !m?.[2]) return null;
-  return acceptClient(`${m[1]} ${m[2].trim()}`);
+  const rawName = `${m[1]} ${m[2].trim()}`
+    .split(/\s+/)
+    .map((w) => (ARTICLES.has(w.toLowerCase()) ? w.toLowerCase() : w.charAt(0).toUpperCase() + w.slice(1)))
+    .join(" ");
+  return acceptClient(rawName, sourceText);
 }
 
 function rescueQuantity(modality: Modality | null, anchor: string): number | null {
@@ -419,6 +429,10 @@ function rescueQuantity(modality: Modality | null, anchor: string): number | nul
       const n = m?.[1] ? parseNum(m[1]) : null;
       if (n && n > 0) return n;
     }
+  }
+  if (modality) {
+    const hasOtherMod = MODALITY_KEYWORDS.some(([, m]) => m !== modality && new RegExp(m, "i").test(low));
+    if (hasOtherMod) return null;
   }
   const generic = low.match(new RegExp(NUMBER_TOKEN, "i"))?.[1];
   const n = generic ? parseNum(generic) : null;
@@ -461,7 +475,7 @@ export function groundDraft(draft: ObservationDraft, sourceText: string, english
   const evidenceSrc = (englishText ?? sourceText).toLowerCase();
   const foundModalities = MODALITY_KEYWORDS.filter(([re]) => re.test(low)).map(([, m]) => m);
   const uniqueModalities = [...new Set(foundModalities)];
-  const client = acceptClient(draft.client) ?? rescueClient(sourceText);
+  const client = acceptClient(draft.client, `${sourceText} ${englishText ?? ""}`) ?? rescueClient(sourceText);
   const seen = new Set<string>();
   const keyOf = (e: EquipmentDraft) =>
     [e.modality, e.quantity, e.brand, e.model, e.ageYears, e.evidence].join("|");
@@ -511,7 +525,8 @@ export function groundDraft(draft: ObservationDraft, sourceText: string, english
         const ageM = norm.match(new RegExp(`(?:${s}|${wordForm ?? ""})\\s+anos?`));
         const year = new Date().getFullYear() - grounded.ageYears;
         const yearM = low2.match(new RegExp(`\\b${year}\\b`));
-        const pos = ageM?.index ?? yearM?.index;
+        const newM = grounded.ageYears === 0 ? low2.match(/\bnuev[oa]s?\b/) : null;
+        const pos = ageM?.index ?? yearM?.index ?? newM?.index;
         if (pos !== undefined && pos !== null) {
           const near = nearestModalityAt(low2, pos);
           if (near && near !== grounded.modality) grounded.ageYears = null;
@@ -530,12 +545,19 @@ export function groundDraft(draft: ObservationDraft, sourceText: string, english
   // Sin evidencia atribuible, la edad queda en null: no se hereda la de otro equipo.
   for (const m of uniqueModalities) {
     if (!items.some((e) => e.modality === m)) {
+      const mSentence = sentencesFor(m, sourceText);
+      const mAnchor = mSentence || sourceText;
+      let age = rescueAge(mAnchor);
+      if (age === 0) {
+        const pos = sourceText.toLowerCase().indexOf("nuevo");
+        if (pos !== -1 && nearestModalityAt(sourceText.toLowerCase(), pos) !== m) age = null;
+      }
       items.push({
         modality: m,
-        quantity: rescueQuantity(m, sourceText),
+        quantity: rescueQuantity(m, mAnchor),
         brand: null,
         model: null,
-        ageYears: null,
+        ageYears: age,
         evidence: null,
       });
     }
