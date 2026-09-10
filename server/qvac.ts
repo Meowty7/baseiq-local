@@ -37,6 +37,10 @@ export function pickDevice(env: string | undefined, hasGpu: boolean): InferDevic
   return hasGpu ? "gpu" : "cpu";
 }
 
+export function isMissingModelError(error: unknown): boolean {
+  return error instanceof Error && /Model with ID ".+" not found/i.test(error.message);
+}
+
 function hostHasGpu(): boolean {
   if (process.platform === "darwin") return true;
   if (process.platform === "win32") return Boolean(process.env.CUDA_PATH);
@@ -98,22 +102,38 @@ export function ensureModel(onProgress?: (pct: number) => void): Promise<string>
 
 export async function inferJson(system: string, user: string, schema: object, timeoutMs = 90000): Promise<{ text: string; inferMs: number }> {
   if (busy) throw new Error("model_busy");
-  const id = await ensureModel();
   busy = true;
   const t0 = Date.now();
   try {
-    const run = completion({
-      modelId: id,
-      history: [
-        { role: "system", content: system },
-        { role: "user", content: user },
-      ],
-      stream: false,
-      responseFormat: { type: "json_schema", json_schema: { name: "observation", schema } },
-    });
-    const timeout = new Promise<never>((_, reject) =>
-      setTimeout(() => reject(new Error("infer_timeout")), timeoutMs));
-    const final = await Promise.race([run.final, timeout]);
+    const complete = async (id: string) => {
+      const run = completion({
+        modelId: id,
+        history: [
+          { role: "system", content: system },
+          { role: "user", content: user },
+        ],
+        stream: false,
+        responseFormat: { type: "json_schema", json_schema: { name: "observation", schema } },
+      });
+      const timeout = new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error("infer_timeout")), timeoutMs));
+      return Promise.race([run.final, timeout]);
+    };
+
+    let id = await ensureModel();
+    let final;
+    try {
+      final = await complete(id);
+    } catch (error) {
+      if (device !== "gpu" || !isMissingModelError(error)) throw error;
+      console.warn("▸ GPU worker restarted after model load; falling back to CPU");
+      modelId = null;
+      loading = null;
+      device = null;
+      process.env.QVAC_DEVICE = "cpu";
+      id = await ensureModel();
+      final = await complete(id);
+    }
     lastInferMs = Date.now() - t0;
     return { text: final.contentText, inferMs: lastInferMs };
   } finally {
