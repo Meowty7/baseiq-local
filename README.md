@@ -51,8 +51,8 @@ Hardware: Ryzen 7 PRO 7840HS, 29 GiB RAM, RTX A1000 6 GiB (inferencia en CPU por
 ```bash
 bun install
 bun test                  # 15 pruebas unitarias
-QVAC_CONFIG_PATH=./qvac.config.json bun run scripts/qvac-smoke.ts   # gate QVAC
-QVAC_CONFIG_PATH=./qvac.config.json bun run evaluate   # 12 casos, falla si no pasa umbrales
+QVAC_CONFIG_PATH=./qvac.config.mjs bun run scripts/qvac-smoke.ts   # gate QVAC
+QVAC_CONFIG_PATH=./qvac.config.mjs bun run evaluate   # 12 casos, falla si no pasa umbrales
 bun run build && bun run start   # producción: http://127.0.0.1:3001
 # Termux (un comando, desde la raíz): bash scripts/termux-start.sh
 ```

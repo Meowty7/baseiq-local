@@ -1,8 +1,0 @@
-{
-  "plugins": ["@qvac/sdk/llamacpp-completion/plugin"],
-  "loggerLevel": "info",
-  "loggerConsoleOutput": true,
-  "httpDownloadConcurrency": 3,
-  "httpConnectionTimeoutMs": 10000,
-  "cacheDirectory": ".qvac/models"
-}

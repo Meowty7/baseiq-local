@@ -5,7 +5,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 export PATH="$HOME/.bun/bin:$PATH"
-export QVAC_CONFIG_PATH="${QVAC_CONFIG_PATH:-$ROOT/qvac.config.json}"
+export QVAC_CONFIG_PATH="${QVAC_CONFIG_PATH:-$ROOT/qvac.config.mjs}"
 export QVAC_DEVICE="${QVAC_DEVICE:-cpu}"
 export SKIP_SEED="${SKIP_SEED:-1}"
 export PORT="${PORT:-3001}"
