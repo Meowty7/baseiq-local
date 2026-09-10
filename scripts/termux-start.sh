@@ -158,8 +158,11 @@ try_enable_gpu() {
   # acceso a /vendor/lib64/hw/vulkan.*.so (Adreno/Mali reales).
   # https://github.com/DioNanos/ollama-termux/blob/main/docs/VULKAN_ANDROID_LOADER.md
   export LD_LIBRARY_PATH="/system/lib64:${saved_ld}"
-  if run_with_timeout 20 "$bin" "$ROOT/scripts/termux-gpu-probe.mjs" >"$TMPDIR/gpu-probe.out" 2>"$TMPDIR/gpu-probe.err" \
-     && grep -q gpu-probe-ok "$TMPDIR/gpu-probe.out" 2>/dev/null; then
+  # El addon puede seguir vivo tras terminar (hilos nativos de Vulkan); no
+  # exigimos que el proceso salga limpio, solo que la marca haya quedado
+  # escrita en disco antes de que el watchdog externo lo mate.
+  run_with_timeout 20 "$bin" "$ROOT/scripts/termux-gpu-probe.mjs" >"$TMPDIR/gpu-probe.out" 2>"$TMPDIR/gpu-probe.err"
+  if grep -q gpu-probe-ok "$TMPDIR/gpu-probe.out" 2>/dev/null; then
     echo "▸ GPU disponible — QVAC_DEVICE=gpu"
     export QVAC_DEVICE="gpu"
   else

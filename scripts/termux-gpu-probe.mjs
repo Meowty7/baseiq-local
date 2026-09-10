@@ -19,4 +19,7 @@ const { llmPlugin } = await import("@qvac/inference/llamacpp-completion/plugin")
 mark("llm-plugin-loaded"); // reaching here means the native addon's static init returned
 registerPlugins([llmPlugin]);
 mark("registered");
-console.log("gpu-probe-ok");
+// writeSync, no console.log: el proceso puede quedar vivo (hilos nativos de
+// Vulkan) hasta que el watchdog externo lo mate a los 20s, y console.log
+// bufferea — se perdería justo esta línea si no se ha volcado a disco antes.
+mark("gpu-probe-ok");
