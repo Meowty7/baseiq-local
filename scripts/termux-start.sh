@@ -144,7 +144,7 @@ graft_sdk_cache() {
 try_enable_gpu() {
   local bin="$1"
   local gpu_dir="$ROOT/node_modules/@qvac/llm-llamacpp/prebuilds/android-arm64/qvac__llm-llamacpp"
-  local so
+  local so saved_ld="$LD_LIBRARY_PATH"
   echo "▸ probando GPU (Vulkan)…"
   if ! pkg install -y vulkan-loader-android >/dev/null 2>&1; then
     echo "▸ vulkan-loader-android no disponible en este dispositivo → CPU"
@@ -153,6 +153,11 @@ try_enable_gpu() {
   for so in libqvac-ggml-vulkan.so libqvac-ggml-opencl.so; do
     [ -f "$gpu_dir/$so.off" ] && mv "$gpu_dir/$so.off" "$gpu_dir/$so"
   done
+  # $PREFIX/lib primero esconde el driver real: ahí vive el loader de Termux
+  # (solo ve llvmpipe, software). /system/lib64 es el loader de Android, con
+  # acceso a /vendor/lib64/hw/vulkan.*.so (Adreno/Mali reales).
+  # https://github.com/DioNanos/ollama-termux/blob/main/docs/VULKAN_ANDROID_LOADER.md
+  export LD_LIBRARY_PATH="/system/lib64:${saved_ld}"
   if run_with_timeout 20 "$bin" "$ROOT/scripts/termux-gpu-probe.mjs" >"$TMPDIR/gpu-probe.out" 2>"$TMPDIR/gpu-probe.err" \
      && grep -q gpu-probe-ok "$TMPDIR/gpu-probe.out" 2>/dev/null; then
     echo "▸ GPU disponible — QVAC_DEVICE=gpu"
@@ -160,6 +165,7 @@ try_enable_gpu() {
   else
     echo "▸ GPU no responde en 20s o falló — vuelvo a CPU"
     cat "$TMPDIR/gpu-probe.out" "$TMPDIR/gpu-probe.err" 2>/dev/null | tail -20 || true
+    export LD_LIBRARY_PATH="$saved_ld"
     for so in libqvac-ggml-vulkan.so libqvac-ggml-opencl.so; do
       [ -f "$gpu_dir/$so" ] && mv "$gpu_dir/$so" "$gpu_dir/$so.off"
     done
