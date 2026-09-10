@@ -20,6 +20,8 @@ export interface OverviewResult {
   byCountry: Record<string, number>;
   fieldsUnknown: number;
   duplicates: string[];
+  stale: string[];
+  conflicts: { client: string; modality: string; detail: string; dates: string[]; statuses: string[] }[];
   renewals: { client: string; modality: string | null; brand: string | null; model: string | null; ageYears: number | null }[];
 }
 
@@ -44,6 +46,7 @@ export const api = {
     client: string; city: string | null; country: string | null;
     status: ObservationStatus; sourceText: string;
     equipment: ObservationDraft["equipment"];
+    submittedBy: string | null; observedAt: string | null; sourceType: string | null; comments: string | null;
   }) =>
     req<{ id: number }>("/api/observations", {
       method: "POST",

@@ -4,47 +4,47 @@
     "expect": { "client": "Hospital DemoCare Pacific", "city": null, "country": "Panamá", "modalities": ["resonador", "tomografo"] }
   },
   {
-    "text": "Clínica Santa Fe, Bogotá, Colombia. Tres ecógrafos GE, modelo Voluson, de unos cinco años.",
-    "expect": { "client": "Clínica Santa Fe", "city": "Bogotá", "country": "Colombia", "modalities": ["ecografo"] }
+    "text": "Clínica Brisa del Norte, Bogotá, Colombia. Tres ecógrafos Novascan, modelo NS-200, de unos cinco años.",
+    "expect": { "client": "Clínica Brisa del Norte", "city": "Bogotá", "country": "Colombia", "modalities": ["ecografo"] }
   },
   {
-    "text": "Hospital Reina Sofía en Madrid. Un tomógrafo Siemens de tres años y dos equipos de rayos X sin marca visible.",
-    "expect": { "client": "Hospital Reina Sofía", "city": "Madrid", "country": null, "modalities": ["tomografo", "rayos-x"] }
+    "text": "Hospital Valle Serena en Madrid. Un tomógrafo Medtron de tres años y dos equipos de rayos X sin marca visible.",
+    "expect": { "client": "Hospital Valle Serena", "city": "Madrid", "country": null, "modalities": ["tomografo", "rayos-x"] }
   },
   {
-    "text": "En el Hospital del Valle, Cali, hay un mamógrafo Hologic de 2019 más o menos.",
-    "expect": { "client": "Hospital del Valle", "city": "Cali", "country": null, "modalities": ["mamografo"] }
+    "text": "En el Hospital Puerta del Sol, Cali, hay un mamógrafo Imagix de 2019 más o menos.",
+    "expect": { "client": "Hospital Puerta del Sol", "city": "Cali", "country": null, "modalities": ["mamografo"] }
   },
   {
-    "text": "Visité la Clínica Alemana en Santiago de Chile: cuatro resonadores Philips Ingenia, dos de unos diez años.",
-    "expect": { "client": "Clínica Alemana", "city": "Santiago de Chile", "country": "Chile", "modalities": ["resonador"] }
+    "text": "Visité la Clínica Loma Alta en Santiago de Chile: cuatro resonadores Scanwell Aurora, dos de unos diez años.",
+    "expect": { "client": "Clínica Loma Alta", "city": "Santiago de Chile", "country": "Chile", "modalities": ["resonador"] }
   },
   {
-    "text": "Hospital San José, San José, Costa Rica. Un ecógrafo portátil, no sé la marca, parece nuevo.",
-    "expect": { "client": "Hospital San José", "city": "San José", "country": "Costa Rica", "modalities": ["ecografo"] }
+    "text": "Hospital Bahía Clara, San José, Costa Rica. Un ecógrafo portátil, no sé la marca, parece nuevo.",
+    "expect": { "client": "Hospital Bahía Clara", "city": "San José", "country": "Costa Rica", "modalities": ["ecografo"] }
   },
   {
-    "text": "Centro Médico Nacional, Ciudad de México. Dos tomógrafos, uno Canon y otro sin identificar, ambos viejos.",
-    "expect": { "client": "Centro Médico Nacional", "city": "Ciudad de México", "country": "México", "modalities": ["tomografo"] }
+    "text": "Centro Médico del Istmo, Ciudad de México. Dos tomógrafos, uno Radiall y otro sin identificar, ambos viejos.",
+    "expect": { "client": "Centro Médico del Istmo", "city": "Ciudad de México", "country": "México", "modalities": ["tomografo"] }
   },
   {
-    "text": "Hospital Italiano de Buenos Aires, Argentina. Vi un resonador Siemens Magnetom de unos seis años.",
-    "expect": { "client": "Hospital Italiano de Buenos Aires", "city": "Buenos Aires", "country": "Argentina", "modalities": ["resonador"] }
+    "text": "Hospital del Faro Austral, Buenos Aires, Argentina. Vi un resonador Sonocare de unos seis años.",
+    "expect": { "client": "Hospital del Faro Austral", "city": "Buenos Aires", "country": "Argentina", "modalities": ["resonador"] }
   },
   {
-    "text": "En la policlínica de David, Panamá, hay tres ecógrafos Mindray de unos cuatro años.",
+    "text": "En la policlínica de David, Panamá, hay tres ecógrafos Novascan de unos cuatro años.",
     "expect": { "client": null, "city": "David", "country": "Panamá", "modalities": ["ecografo"] }
   },
   {
-    "text": "Hospital Punta Pacífica, Panamá. Dos resonadores GE Signa y un tomógrafo del mismo fabricante.",
-    "expect": { "client": "Hospital Punta Pacífica", "city": null, "country": "Panamá", "modalities": ["resonador", "tomografo"] }
+    "text": "Hospital Costa Serena, Panamá. Dos resonadores Medtron M500 y un tomógrafo del mismo fabricante.",
+    "expect": { "client": "Hospital Costa Serena", "city": null, "country": "Panamá", "modalities": ["resonador", "tomografo"] }
   },
   {
-    "text": "Clínica del Country, Bogotá. Un mamógrafo nuevo y un ecógrafo viejo, sin más detalles.",
-    "expect": { "client": "Clínica del Country", "city": "Bogotá", "country": null, "modalities": ["mamografo", "ecografo"] }
+    "text": "Clínica Páramo Verde, Bogotá. Un mamógrafo nuevo y un ecógrafo viejo, sin más detalles.",
+    "expect": { "client": "Clínica Páramo Verde", "city": "Bogotá", "country": null, "modalities": ["mamografo", "ecografo"] }
   },
   {
-    "text": "Hospital Vozandes, Quito, Ecuador. Cinco equipos de rayos X Philips de más de doce años, hay que renovarlos.",
-    "expect": { "client": "Hospital Vozandes", "city": "Quito", "country": "Ecuador", "modalities": ["rayos-x"] }
+    "text": "Hospital Monteverde, Quito, Ecuador. Cinco equipos de rayos X Scanwell de más de doce años, hay que renovarlos.",
+    "expect": { "client": "Hospital Monteverde", "city": "Quito", "country": "Ecuador", "modalities": ["rayos-x"] }
   }
 ]

@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref } from "vue";
 import { api, type ExtractionResult } from "../services/api";
-import type { ObservationDraft } from "../../shared/observation";
+import { appendFollowUp, type ObservationDraft } from "../../shared/observation";
 
 const emit = defineEmits<{ saved: [] }>();
 
@@ -11,20 +11,37 @@ const error = ref<string | null>(null);
 const result = ref<ExtractionResult | null>(null);
 const draft = ref<ObservationDraft | null>(null);
 const saving = ref(false);
+const submittedBy = ref("");
+const observedAt = ref(new Date().toISOString().slice(0, 10));
+const sourceType = ref("visita");
+const followAnswer = ref("");
+const transcript = ref("");
 
 const EXAMPLES = [
   "Estoy en Hospital DemoCare Pacific, en Panamá. Vi dos resonadores y un tomógrafo. Uno de los resonadores parece de unos ocho años.",
-  "Clínica Santa Fe, Bogotá, Colombia. Tres ecógrafos GE Voluson de unos cinco años.",
-  "Hospital Reina Sofía en Madrid. Un tomógrafo Siemens de tres años y dos equipos de rayos X sin marca visible.",
+  "Clínica Brisa del Norte, Bogotá, Colombia. Tres ecógrafos Novascan NS-200 de unos cinco años.",
+  "Hospital Valle Serena en Madrid. Un tomógrafo Medtron de tres años y dos equipos de rayos X sin marca visible.",
 ];
 
 async function extract() {
   if (text.value.trim().length < 10 || loading.value) return;
+  transcript.value = text.value.trim();
+  await runExtraction(transcript.value);
+}
+
+async function answerFollowUp() {
+  if (!result.value || followAnswer.value.trim().length < 2 || loading.value) return;
+  transcript.value = appendFollowUp(transcript.value, followAnswer.value);
+  followAnswer.value = "";
+  await runExtraction(transcript.value);
+}
+
+async function runExtraction(input: string) {
   loading.value = true;
   error.value = null;
   result.value = null;
   try {
-    result.value = await api.extract(text.value.trim());
+    result.value = await api.extract(input);
     draft.value = JSON.parse(JSON.stringify(result.value.draft));
   } catch (e) {
     error.value = e instanceof Error ? e.message : "extract_failed";
@@ -48,6 +65,10 @@ async function confirm(status: "Confirmado" | "Reportado" | "Estimado") {
       status,
       sourceText: result.value.sourceText,
       equipment: draft.value.equipment,
+      submittedBy: submittedBy.value.trim() || null,
+      observedAt: observedAt.value || null,
+      sourceType: sourceType.value,
+      comments: null,
     });
     result.value = null;
     draft.value = null;
@@ -80,6 +101,17 @@ function updateEquipment(index: number, field: string, value: string) {
       <span>Lo que viste en la visita</span>
       <textarea v-model="text" rows="4" placeholder="Ej.: Estoy en Hospital DemoCare Pacific, en Panamá. Vi dos resonadores…" />
     </label>
+    <div class="grid meta">
+      <label>Quién observó <input v-model="submittedBy" placeholder="Nombre del colaborador" /></label>
+      <label>Fecha de visita <input v-model="observedAt" type="date" /></label>
+      <label>Fuente
+        <select v-model="sourceType">
+          <option value="visita">visita presencial</option>
+          <option value="llamada">llamada</option>
+          <option value="reporte">reporte de tercero</option>
+        </select>
+      </label>
+    </div>
     <div class="row">
       <button :disabled="loading || text.trim().length < 10" @click="extract">
         {{ loading ? "Extrayendo en el dispositivo…" : "Extraer con IA local" }}
@@ -121,6 +153,10 @@ function updateEquipment(index: number, field: string, value: string) {
         <p v-if="eq.evidence" class="evidence">“{{ eq.evidence }}”</p>
       </div>
       <p v-if="result.question" class="question">{{ result.question }}</p>
+      <div v-if="result.question" class="follow">
+        <input v-model="followAnswer" placeholder="Responde aquí, ej.: Es de la marca Novascan" @keyup.enter="answerFollowUp" />
+        <button :disabled="loading || followAnswer.trim().length < 2" @click="answerFollowUp">Agregar dato</button>
+      </div>
       <div class="row">
         <button class="primary" :disabled="saving" @click="confirm('Confirmado')">Confirmar</button>
         <button :disabled="saving" @click="confirm('Reportado')">Guardar como reportado</button>

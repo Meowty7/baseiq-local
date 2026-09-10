@@ -41,6 +41,14 @@ function maxOf(entries: [string, number][]): number {
         </li>
       </ul>
       <p v-else class="muted">Sin equipos en edad de renovación.</p>
+      <h3>Frescura de datos</h3>
+      <p v-if="overview.stale.length === 0" class="muted">Todo verificado recientemente.</p>
+      <p v-for="(s, i) in overview.stale" :key="i" class="question">{{ s }}</p>
+      <h3>Conflictos <small>(no se fusionan solos)</small></h3>
+      <p v-if="overview.conflicts.length === 0" class="muted">Sin observaciones contradictorias.</p>
+      <p v-for="(c, i) in overview.conflicts" :key="i" class="question">
+        {{ c.client }} · {{ c.modality }}: {{ c.detail }} ({{ c.dates.join(" / ") }})
+      </p>
       <p v-for="(d, i) in overview.duplicates" :key="i" class="question">Posible duplicado: {{ d }}</p>
     </div>
   </section>

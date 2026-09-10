@@ -30,3 +30,22 @@ describe("observations", () => {
     expect(listObservations(db)).toHaveLength(2);
   });
 });
+
+describe("provenance", () => {
+  test("migración agrega columnas sin perder datos y guarda trazabilidad", () => {
+    migrate(db);
+    const cols = db.query(`SELECT name FROM pragma_table_info('observations');`).all() as { name: string }[];
+    for (const c of ["submitted_by", "observed_at", "source_type", "comments", "confirmed_at"]) {
+      expect(cols.map((x) => x.name)).toContain(c);
+    }
+    const id = saveObservation(db,
+      { client: "Hospital DemoCare Pacific", city: null, country: "Panamá", status: "Confirmado", sourceText: "t", submittedBy: "A. Rivera", observedAt: "2026-09-10", sourceType: "visita", comments: null, confirmedAt: "2026-09-10T10:00:00.000Z" },
+      []);
+    expect(id).toBeGreaterThan(0);
+    const [o] = listObservations(db);
+    expect(o.submittedBy).toBe("A. Rivera");
+    expect(o.observedAt).toBe("2026-09-10");
+    expect(o.sourceType).toBe("visita");
+    expect(o.confirmedAt).toBe("2026-09-10T10:00:00.000Z");
+  });
+});

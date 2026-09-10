@@ -1,7 +1,7 @@
 import { getDb, saveObservation, listObservations, closeDb } from "./db";
 import { extractObservation } from "./extraction";
 import { ensureModel, isReady, isBusy, getLastInferMs, shutdown, MODEL_NAME } from "./qvac";
-import { OBSERVATION_STATUSES } from "../shared/observation";
+import { OBSERVATION_STATUSES, SOURCE_TYPES, freshness, detectConflicts } from "../shared/observation";
 
 const PORT = Number(process.env.PORT ?? 3001);
 const DIST = "./dist";
@@ -50,6 +50,7 @@ const server = Bun.serve({
       const body = await req.json().catch(() => null) as {
         client?: unknown; city?: unknown; country?: unknown; status?: unknown;
         sourceText?: unknown; equipment?: unknown[];
+        submittedBy?: unknown; observedAt?: unknown; sourceType?: unknown; comments?: unknown;
       } | null;
       if (!body || typeof body.client !== "string" || !body.client.trim()) {
         return json({ error: "client is required" }, 400);
@@ -60,12 +61,22 @@ const server = Bun.serve({
       if (typeof body.sourceText !== "string" || !Array.isArray(body.equipment)) {
         return json({ error: "sourceText and equipment are required" }, 400);
       }
+      if (body.sourceType !== undefined && body.sourceType !== null && !SOURCE_TYPES.includes(body.sourceType as never)) {
+        return json({ error: `sourceType must be one of ${SOURCE_TYPES.join(", ")}` }, 400);
+      }
+      const status = body.status as (typeof OBSERVATION_STATUSES)[number];
+      const str = (v: unknown) => (typeof v === "string" && v.trim() ? v.trim() : null);
       const id = saveObservation(db, {
         client: body.client.trim(),
         city: typeof body.city === "string" ? body.city : null,
         country: typeof body.country === "string" ? body.country : null,
-        status: body.status as (typeof OBSERVATION_STATUSES)[number],
+        status,
         sourceText: body.sourceText,
+        submittedBy: str(body.submittedBy),
+        observedAt: str(body.observedAt),
+        sourceType: str(body.sourceType),
+        comments: str(body.comments),
+        confirmedAt: status === "Confirmado" ? new Date().toISOString() : null,
       }, body.equipment as never);
       return json({ id }, 201);
     }
@@ -81,9 +92,12 @@ const server = Bun.serve({
       let unknown = 0;
       const seen = new Map<string, number>();
       const duplicates: string[] = [];
+      const stale: string[] = [];
       const renewals: { client: string; modality: string | null; brand: string | null; model: string | null; ageYears: number | null }[] = [];
       for (const o of obs) {
         if (o.country) byCountry[o.country] = (byCountry[o.country] ?? 0) + 1;
+        const f = freshness(o.observedAt, o.confirmedAt);
+        if (f !== "reciente") stale.push(`${o.client} (${f}, ${o.status})`);
         for (const e of o.equipment) {
           if (e.modality) byModality[e.modality] = (byModality[e.modality] ?? 0) + (e.quantity ?? 1);
           if (!e.brand || !e.model || e.ageYears === null) unknown++;
@@ -95,7 +109,7 @@ const server = Bun.serve({
           }
         }
       }
-      return json({ observations: obs.length, byModality, byCountry, fieldsUnknown: unknown, duplicates, renewals });
+      return json({ observations: obs.length, byModality, byCountry, fieldsUnknown: unknown, duplicates, stale, renewals, conflicts: detectConflicts(obs) });
     }
 
     const file = Bun.file(DIST + (url.pathname === "/" ? "/index.html" : url.pathname));
