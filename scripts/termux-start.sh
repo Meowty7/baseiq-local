@@ -91,6 +91,32 @@ force_android_bare() {
   wrap_bare_bin "node_modules/${android_pkg}/bin/bare"
 }
 
+
+# Bun en Termux ejecuta @qvac/sdk desde ~/.bun/install/cache; desde ahí
+# no ve bare-runtime ni @qvac/inference del proyecto.
+graft_sdk_cache() {
+  export NODE_PATH="$ROOT/node_modules${NODE_PATH:+:$NODE_PATH}"
+  local resolved cache_root name
+  resolved="$(bun -e 'console.log(require.resolve("@qvac/sdk"))')"
+  echo "▸ @qvac/sdk ${resolved}"
+  case "$resolved" in
+    *"/install/cache/"*)
+      cache_root="${resolved%%/dist/*}"
+      echo "▸ graft ${cache_root}/node_modules"
+      mkdir -p "$cache_root/node_modules/@qvac"
+      for name in "$ROOT"/node_modules/@qvac/*; do
+        [ -e "$name" ] || continue
+        ln -sfn "$name" "$cache_root/node_modules/@qvac/$(basename "$name")"
+      done
+      for name in "$ROOT"/node_modules/bare-runtime "$ROOT"/node_modules/bare-runtime-* "$ROOT"/node_modules/bare-rpc; do
+        [ -e "$name" ] || continue
+        ln -sfn "$name" "$cache_root/node_modules/$(basename "$name")"
+      done
+      ;;
+  esac
+  bun -e 'await import("bare-runtime/spawn"); await import("@qvac/inference/surface"); console.log("▸ imports-ok")'
+}
+
 ensure_qvac_native() {
   if [ "$in_termux" -eq 1 ]; then
     export TMPDIR="${PREFIX:-/data/data/com.termux/files/usr}/tmp"
@@ -115,6 +141,7 @@ ensure_qvac_native() {
       exit 1
     fi
     echo "▸ bare-ok"
+    graft_sdk_cache
     return
   fi
   if [ ! -d node_modules/@qvac/sdk ]; then
@@ -142,4 +169,7 @@ if [ "$in_termux" -eq 1 ]; then
   echo "▸ $URL  (Chrome se abre solo; deja Termux en primer plano)"
 fi
 
+if [ "$in_termux" -eq 1 ]; then
+  export NODE_PATH="$ROOT/node_modules${NODE_PATH:+:$NODE_PATH}"
+fi
 exec bun run start
