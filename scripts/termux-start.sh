@@ -96,25 +96,26 @@ force_android_bare() {
 # no ve bare-runtime ni @qvac/inference del proyecto.
 graft_sdk_cache() {
   export NODE_PATH="$ROOT/node_modules${NODE_PATH:+:$NODE_PATH}"
-  local resolved cache_root name
+  local resolved cache name
   resolved="$(bun -e 'console.log(require.resolve("@qvac/sdk"))')"
   echo "▸ @qvac/sdk ${resolved}"
   case "$resolved" in
     *"/install/cache/"*)
-      cache_root="${resolved%%/dist/*}"
-      echo "▸ graft ${cache_root}/node_modules"
-      mkdir -p "$cache_root/node_modules/@qvac"
+      cache="${resolved%%/install/cache/*}/install/cache"
+      echo "▸ graft ${cache}/node_modules (toda la caché)"
+      mkdir -p "$cache/node_modules/@qvac"
       for name in "$ROOT"/node_modules/@qvac/*; do
         [ -e "$name" ] || continue
-        ln -sfn "$name" "$cache_root/node_modules/@qvac/$(basename "$name")"
+        ln -sfn "$name" "$cache/node_modules/@qvac/$(basename "$name")"
       done
-      for name in "$ROOT"/node_modules/bare-runtime "$ROOT"/node_modules/bare-runtime-* "$ROOT"/node_modules/bare-rpc; do
+      for name in "$ROOT"/node_modules/*; do
         [ -e "$name" ] || continue
-        ln -sfn "$name" "$cache_root/node_modules/$(basename "$name")"
+        [ "$(basename "$name")" = "@qvac" ] && continue
+        ln -sfn "$name" "$cache/node_modules/$(basename "$name")"
       done
       ;;
   esac
-  bun -e 'await import("bare-runtime/spawn"); await import("@qvac/inference/surface"); console.log("▸ imports-ok")'
+  bun -e 'await import("bare-runtime/spawn"); await import("@qvac/rag/errors"); await import("@qvac/inference/surface"); await import("@qvac/sdk"); console.log("▸ imports-ok")'
 }
 
 ensure_qvac_native() {
