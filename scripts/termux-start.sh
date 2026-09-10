@@ -122,7 +122,10 @@ ensure_qvac_native() {
   if [ "$in_termux" -eq 1 ]; then
     export TMPDIR="${PREFIX:-/data/data/com.termux/files/usr}/tmp"
     mkdir -p "$TMPDIR"
-    pkg install -y libandroid-spawn >/dev/null 2>&1 || true
+    pkg install -y libandroid-spawn libc++ >/dev/null 2>&1 || pkg install -y libandroid-spawn >/dev/null 2>&1 || true
+    export LD_PRELOAD=""
+    export LD_LIBRARY_PATH="${PREFIX:-/data/data/com.termux/files/usr}/lib:${ROOT}/node_modules/@qvac/llm-llamacpp/prebuilds/android-arm64/qvac__llm-llamacpp${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+    export QVAC_RPC_INIT_TIMEOUT_MS="${QVAC_RPC_INIT_TIMEOUT_MS:-120000}"
     if [ -L node_modules/@qvac/sdk ] || [ ! -f node_modules/bare-runtime/lib/spawn.js ]; then
       echo "▸ bun install --linker=hoisted…"
       bun install --linker=hoisted --backend=copyfile || bun install --linker=hoisted
@@ -131,6 +134,8 @@ ensure_qvac_native() {
     local bin
     bin="$(bun -e 'process.stdout.write(require("bare-runtime")())')"
     echo "▸ bare ${bin}"
+    wrap_bare_bin "$bin"
+    bin="$(bun -e 'process.stdout.write(require("bare-runtime")())')"
     if is_elf "$bin" && grep -aq 'ld-linux' "$bin"; then
       echo "✖ sigue siendo glibc; force_android_bare no pegó" >&2
       exit 1
@@ -138,11 +143,23 @@ ensure_qvac_native() {
     if ! "$bin" "$ROOT/scripts/bare-ok.mjs" >/dev/null 2>"$TMPDIR/bare-ok.err"; then
       echo "✖ bare abortó. err:" >&2
       cat "$TMPDIR/bare-ok.err" >&2 || true
-      echo "Prueba: unset LD_PRELOAD; pkg install libandroid-spawn" >&2
+      echo "Prueba: unset LD_PRELOAD; pkg install libc++ libandroid-spawn" >&2
       exit 1
     fi
     echo "▸ bare-ok"
     graft_sdk_cache
+    echo "▸ probe worker (carga el addon LLaMA)…"
+    if ! "$bin" "$ROOT/scripts/termux-worker-probe.mjs" >"$TMPDIR/probe.out" 2>"$TMPDIR/probe.err"; then
+      echo "✖ worker probe falló:" >&2
+      cat "$TMPDIR/probe.out" "$TMPDIR/probe.err" >&2 || true
+      exit 1
+    fi
+    if ! grep -q probe-ok "$TMPDIR/probe.out" 2>/dev/null; then
+      echo "✖ worker probe sin probe-ok:" >&2
+      cat "$TMPDIR/probe.out" "$TMPDIR/probe.err" >&2 || true
+      exit 1
+    fi
+    echo "▸ worker-ok"
     return
   fi
   if [ ! -d node_modules/@qvac/sdk ]; then
