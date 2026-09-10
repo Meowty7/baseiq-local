@@ -55,32 +55,66 @@ fi
 
 ensure_bun
 
-# QVAC spawnea un worker Bare. El linker aislado de Bun deja @qvac/sdk en
-# ~/.bun/install/cache y no resuelve bare-runtime/spawn.
+# QVAC spawnea un worker Bare. En Termux el binario glibc y LD_PRELOAD
+# (termux-exec) abortan el proceso (SIGABRT, stderr vacío).
+is_elf() {
+  [ -f "$1" ] && [ "$(od -An -N4 -tx1 "$1" 2>/dev/null | tr -d ' \n')" = "7f454c46" ]
+}
+
+wrap_bare_bin() {
+  local bin="$1"
+  is_elf "$bin" || return 0
+  mv "$bin" "${bin}.real"
+  printf '%s\n' '#!/system/bin/sh' 'unset LD_PRELOAD' 'DIR=$(dirname "$0")' 'exec "$DIR/bare.real" "$@"' > "$bin"
+  chmod 755 "$bin" "${bin}.real"
+}
+
+force_android_bare() {
+  local arch android_pkg plat
+  plat="$(bun -e 'process.stdout.write(process.platform)')"
+  arch="$(bun -e 'process.stdout.write(process.arch)')"
+  android_pkg="bare-runtime-android-arm64"
+  [ "$arch" = "arm" ] && android_pkg="bare-runtime-android-arm"
+  echo "▸ bun ${plat}-${arch} → ${android_pkg}"
+  if [ ! -d "node_modules/${android_pkg}" ]; then
+    bun add --exact "${android_pkg}@1.32.0" --linker=hoisted || bun add --exact "${android_pkg}@1.32.0"
+  fi
+  # Siempre pisa el paquete linux: si existe el glibc, Bare muere con SIGABRT.
+  local plat_pkg dest
+  for plat_pkg in linux-arm64 linux-arm linux-x64; do
+    dest="node_modules/bare-runtime-${plat_pkg}"
+    rm -rf "$dest"
+    mkdir -p "$dest"
+    printf '%s\n' "{\"name\":\"bare-runtime-${plat_pkg}\",\"main\":\"index.js\"}" > "${dest}/package.json"
+    printf '%s\n' "module.exports = require('${android_pkg}')" > "${dest}/index.js"
+  done
+  wrap_bare_bin "node_modules/${android_pkg}/bin/bare"
+}
+
 ensure_qvac_native() {
   if [ "$in_termux" -eq 1 ]; then
+    export TMPDIR="${PREFIX:-/data/data/com.termux/files/usr}/tmp"
+    mkdir -p "$TMPDIR"
+    pkg install -y libandroid-spawn >/dev/null 2>&1 || true
     if [ -L node_modules/@qvac/sdk ] || [ ! -f node_modules/bare-runtime/lib/spawn.js ]; then
       echo "▸ bun install --linker=hoisted…"
       bun install --linker=hoisted --backend=copyfile || bun install --linker=hoisted
     fi
-    local plat arch android_pkg linux_alias
-    plat="$(bun -e 'process.stdout.write(process.platform)')"
-    arch="$(bun -e 'process.stdout.write(process.arch)')"
-    android_pkg="bare-runtime-android-arm64"
-    [ "$arch" = "arm" ] && android_pkg="bare-runtime-android-arm"
-    if [ ! -d "node_modules/${android_pkg}" ]; then
-      echo "▸ ${android_pkg}…"
-      bun add --exact "${android_pkg}@1.32.0" --linker=hoisted || bun add --exact "${android_pkg}@1.32.0"
+    force_android_bare
+    local bin
+    bin="$(bun -e 'process.stdout.write(require("bare-runtime")())')"
+    echo "▸ bare ${bin}"
+    if is_elf "$bin" && grep -aq 'ld-linux' "$bin"; then
+      echo "✖ sigue siendo glibc; force_android_bare no pegó" >&2
+      exit 1
     fi
-    # bun en Termux a menudo reporta linux; el binario glibc no corre en Android
-    if [ "$plat" = "linux" ]; then
-      linux_alias="node_modules/bare-runtime-linux-${arch}"
-      if [ ! -f "${linux_alias}/index.js" ]; then
-        mkdir -p "$linux_alias"
-        printf '%s\n' "{\"name\":\"bare-runtime-linux-${arch}\",\"main\":\"index.js\"}" > "${linux_alias}/package.json"
-        printf '%s\n' "module.exports = require('${android_pkg}')" > "${linux_alias}/index.js"
-      fi
+    if ! "$bin" "$ROOT/scripts/bare-ok.mjs" >/dev/null 2>"$TMPDIR/bare-ok.err"; then
+      echo "✖ bare abortó. err:" >&2
+      cat "$TMPDIR/bare-ok.err" >&2 || true
+      echo "Prueba: unset LD_PRELOAD; pkg install libandroid-spawn" >&2
+      exit 1
     fi
+    echo "▸ bare-ok"
     return
   fi
   if [ ! -d node_modules/@qvac/sdk ]; then
