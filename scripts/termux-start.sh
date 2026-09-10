@@ -124,7 +124,7 @@ ensure_qvac_native() {
     mkdir -p "$TMPDIR"
     pkg install -y libandroid-spawn libc++ >/dev/null 2>&1 || pkg install -y libandroid-spawn >/dev/null 2>&1 || true
     export LD_PRELOAD=""
-    export LD_LIBRARY_PATH="${PREFIX:-/data/data/com.termux/files/usr}/lib:${ROOT}/node_modules/@qvac/llm-llamacpp/prebuilds/android-arm64/qvac__llm-llamacpp${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+    export LD_LIBRARY_PATH="${PREFIX:-/data/data/com.termux/files/usr}/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
     export QVAC_RPC_INIT_TIMEOUT_MS="${QVAC_RPC_INIT_TIMEOUT_MS:-120000}"
     if [ -L node_modules/@qvac/sdk ] || [ ! -f node_modules/bare-runtime/lib/spawn.js ]; then
       echo "▸ bun install --linker=hoisted…"
@@ -148,18 +148,11 @@ ensure_qvac_native() {
     fi
     echo "▸ bare-ok"
     graft_sdk_cache
-    echo "▸ probe worker (carga el addon LLaMA)…"
-    if ! "$bin" "$ROOT/scripts/termux-worker-probe.mjs" >"$TMPDIR/probe.out" 2>"$TMPDIR/probe.err"; then
-      echo "✖ worker probe falló:" >&2
-      cat "$TMPDIR/probe.out" "$TMPDIR/probe.err" >&2 || true
-      exit 1
-    fi
-    if ! grep -q probe-ok "$TMPDIR/probe.out" 2>/dev/null; then
-      echo "✖ worker probe sin probe-ok:" >&2
-      cat "$TMPDIR/probe.out" "$TMPDIR/probe.err" >&2 || true
-      exit 1
-    fi
-    echo "▸ worker-ok"
+    local gpu_dir="$ROOT/node_modules/@qvac/llm-llamacpp/prebuilds/android-arm64/qvac__llm-llamacpp"
+    local so
+    for so in libqvac-ggml-vulkan.so libqvac-ggml-opencl.so; do
+      [ -f "$gpu_dir/$so" ] && mv "$gpu_dir/$so" "$gpu_dir/$so.off"
+    done
     return
   fi
   if [ ! -d node_modules/@qvac/sdk ]; then
