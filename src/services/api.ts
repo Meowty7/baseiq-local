@@ -11,6 +11,7 @@ export interface StatusResult {
   ready: boolean;
   busy: boolean;
   model: string;
+  device: "gpu" | "cpu" | null;
   lastInferMs: number | null;
 }
 

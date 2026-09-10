@@ -47,6 +47,55 @@ export function freshness(observedAt: string | null, confirmedAt: string | null,
   return "desactualizada";
 }
 
+export interface Client360Row {
+  client: string;
+  city: string | null;
+  country: string | null;
+  modality: Modality;
+  quantity: number;
+  ageRange: string | null;
+  confidence: ObservationStatus;
+  freshness: Freshness;
+  lastSeen: string;
+  observations: number;
+}
+
+// ponytail: agregación ingenua O(n) en memoria; a miles de clientes, agrupar en SQL.
+export function aggregate360(observations: ObservationRecord[]): Client360Row[] {
+  const groups = new Map<string, ObservationRecord[]>();
+  for (const o of observations) {
+    for (const e of o.equipment) {
+      if (!e.modality) continue;
+      const key = `${o.client ?? "Sin cliente"}||${e.modality}`;
+      const list = groups.get(key) ?? [];
+      list.push(o);
+      groups.set(key, list);
+    }
+  }
+  const rows: Client360Row[] = [];
+  for (const [key, list] of groups) {
+    const [client, modality] = key.split("||") as [string, Modality];
+    const items = list.flatMap((o) => o.equipment.filter((e) => e.modality === modality));
+    const quantities = items.map((e) => e.quantity).filter((q): q is number => q !== null);
+    const ages = items.map((e) => e.ageYears).filter((a): a is number => a !== null);
+    const statuses = list.map((o) => o.status);
+    const rank = (s: ObservationStatus) => OBSERVATION_STATUSES.indexOf(s);
+    const confidence = statuses.sort((a, b) => rank(a) - rank(b))[0] ?? "Desconocido";
+    const last = list.map((o) => o.observedAt ?? o.createdAt).sort().reverse()[0];
+    const qty = quantities.reduce((a, b) => a + b, 0);
+    const ageRange = ages.length === 0 ? null
+      : ages.length === 1 ? `${ages[0]}`
+      : `${Math.min(...ages)}–${Math.max(...ages)}`;
+    rows.push({
+      client, city: list[0]?.city ?? null, country: list[0]?.country ?? null,
+      modality, quantity: qty || items.length,
+      ageRange, confidence, freshness: freshness(last, list.find((o) => o.confirmedAt)?.confirmedAt ?? null),
+      lastSeen: last.slice(0, 10), observations: list.length,
+    });
+  }
+  return rows.sort((a, b) => a.client.localeCompare(b.client) || a.modality.localeCompare(b.modality));
+}
+
 export function appendFollowUp(transcript: string, answer: string): string {
   return `${transcript}\nRespuesta: ${answer.trim()}`;
 }
@@ -177,13 +226,101 @@ export function nextQuestion(draft: ObservationDraft): string | null {
   return labels[field] ?? `¿Puedes precisar ${field}?`;
 }
 
-const MODALITY_KEYWORDS: [RegExp, Modality][] = [
-  [/resonador(es)?/i, "resonador"],
-  [/tom[oó]grafo(s)?/i, "tomografo"],
-  [/ec[oó]grafo(s)?/i, "ecografo"],
-  [/rayos?\s*x/i, "rayos-x"],
-  [/mam[oó]grafo(s)?/i, "mamografo"],
+export const MODALITY_GLOSSARY: { id: Modality; es: string; en: string }[] = [
+  { id: "resonador", es: "resonador", en: "MRI" },
+  { id: "tomografo", es: "tomógrafo", en: "CT" },
+  { id: "ecografo", es: "ecógrafo", en: "ultrasound" },
+  { id: "rayos-x", es: "rayos x", en: "X-ray" },
+  { id: "mamografo", es: "mamógrafo", en: "mammograph" },
+  { id: "otra", es: "otra", en: "other" },
 ];
+
+// ponytail: léxico de campo, no traductor. Nombres propios (hospital, ciudad, marca) se dejan.
+const ES_TO_EN: [RegExp, string][] = [
+  [/sin marca visible/gi, "no visible brand"],
+  [/sin m[aá]s detalles/gi, "no further details"],
+  [/del mismo fabricante/gi, "from the same manufacturer"],
+  [/hay que renovarlos/gi, "they need replacement"],
+  [/no s[eé] la marca/gi, "unknown brand"],
+  [/sin identificar/gi, "unidentified"],
+  [/m[aá]s o menos/gi, "approximately"],
+  [/uno de los/gi, "one of the"],
+  [/equipos de rayos\s*x/gi, "X-ray units"],
+  [/estoy en/gi, "I am at"],
+  [/visit[eé] la/gi, "I visited"],
+  [/visit[eé] el/gi, "I visited"],
+  [/parece de/gi, "seems"],
+  [/de unos/gi, "about"],
+  [/de unas/gi, "about"],
+  [/m[aá]s de/gi, "more than"],
+  [/en el/gi, "at the"],
+  [/en la/gi, "at the"],
+  [/hay un/gi, "there is a"],
+  [/hay una/gi, "there is a"],
+  [/\bhay\b/gi, "there are"],
+  [/rayos\s*x/gi, "X-ray"],
+  [/resonadores/gi, "MRI scanners"],
+  [/resonador/gi, "MRI"],
+  [/tom[oó]grafos/gi, "CT scanners"],
+  [/tom[oó]grafo/gi, "CT scanner"],
+  [/ec[oó]grafos/gi, "ultrasound units"],
+  [/ec[oó]grafo/gi, "ultrasound"],
+  [/mam[oó]grafos/gi, "mammographs"],
+  [/mam[oó]grafo/gi, "mammograph"],
+  [/\ba[nñ]os\b/gi, "years"],
+  [/\bnuev[oa]s?\b/gi, "new"],
+  [/\bviej[oa]s?\b/gi, "old"],
+  [/port[aá]til(?:es)?/gi, "portable"],
+  [/\bambos\b/gi, "both"],
+  [/\bmodelo\b/gi, "model"],
+  [/\bequipos\b/gi, "units"],
+  [/\bparece\b/gi, "seems"],
+  [/\bvisit[eé]\b/gi, "I visited"],
+  [/\bvi\b/gi, "I saw"],
+  [/\bunos\b|\bunas\b/gi, "about"],
+  [/\bdoce\b/gi, "twelve"],
+  [/\bonce\b/gi, "eleven"],
+  [/\bdiez\b/gi, "ten"],
+  [/\bnueve\b/gi, "nine"],
+  [/\bocho\b/gi, "eight"],
+  [/\bsiete\b/gi, "seven"],
+  [/\bseis\b/gi, "six"],
+  [/\bcinco\b/gi, "five"],
+  [/\bcuatro\b/gi, "four"],
+  [/\btres\b/gi, "three"],
+  [/\bdos\b/gi, "two"],
+  [/\buno\b/gi, "one"],
+  [/\botra\b|\botro\b/gi, "another"],
+  [/\buna\b/gi, "a"],
+  [/\bun\b/gi, "a"],
+  [/\ben\b/gi, "in"],
+  [/\by\b/gi, "and"],
+];
+
+export function toEnglishObservation(text: string): string {
+  let out = text;
+  for (const [re, en] of ES_TO_EN) out = out.replace(re, en);
+  out = out.replace(/ de (?=\d|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|about|more)/gi, " of ");
+  return out.replace(/[ \t]+/g, " ").trim();
+}
+
+const MODALITY_KEYWORDS: [RegExp, Modality][] = [
+  [/resonador(es)?|\bmri\b|\bmagnetic\s+resonance\b/i, "resonador"],
+  [/tom[oó]grafo(s)?|\bct(?:\s*scanner)?\b|\bcomputed\s+tomograph/i, "tomografo"],
+  [/ec[oó]grafo(s)?|\bultrasound\b|\bsonograph/i, "ecografo"],
+  [/rayos?\s*x|\bx[-\s]?ray/i, "rayos-x"],
+  [/mam[oó]grafo(s)?|\bmammograph|\bmammogram/i, "mamografo"],
+];
+
+const MODALITY_ALIASES: Record<string, Modality> = {
+  resonador: "resonador", resonadores: "resonador", mri: "resonador", "magnetic-resonance": "resonador",
+  tomografo: "tomografo", tomografos: "tomografo", ct: "tomografo", "ct-scanner": "tomografo", ctscanner: "tomografo",
+  "computed-tomography": "tomografo",
+  ecografo: "ecografo", ecografos: "ecografo", ultrasound: "ecografo", sonograph: "ecografo",
+  "rayos-x": "rayos-x", rayosx: "rayos-x", "x-ray": "rayos-x", xray: "rayos-x",
+  mamografo: "mamografo", mamografos: "mamografo", mammograph: "mamografo", mammogram: "mamografo",
+  otra: "otra", other: "otra",
+};
 
 const NUMBER_TOKEN = String.raw`(\d+|una?|dos|tres|cuatro|cinco|seis|siete|ocho|nueve|diez)`;
 const WORD_TO_NUM: Record<string, number> = {
@@ -198,21 +335,39 @@ function parseNum(token: string): number | null {
   return WORD_TO_NUM[t] ?? null;
 }
 
-const FACILITY_PREFIXES = ["hospital", "clinica", "clinic", "centro", "policlinica", "sanatorio"];
+const FACILITY_RE =
+  /^(hospital|cl[ií]nica|clinic|centro m[eé]dico|policl[ií]nica|polyclinic|sanatorio|centro)\s+(.+)$/i;
+const ARTICLES = new Set(["de", "del", "la", "el", "los", "las", "of", "the"]);
 
 function stripAccents(s: string): string {
   return s.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
 }
 
+function acceptClient(raw: string | null): string | null {
+  if (!raw) return null;
+  const name = raw.split(",")[0].trim();
+  if (name.length === 0 || name.length > 60) return null;
+  const m = name.match(FACILITY_RE);
+  if (!m?.[2]) return null;
+  const words = m[2].trim().split(/\s+/);
+  const isArticle = (w: string) => ARTICLES.has(stripAccents(w));
+  const content = words.filter((w) => !isArticle(w));
+  if (content.length === 0) return null;
+  // "de David" / "of David" = ciudad. "del Istmo" / "de la Esperanza" = nombre.
+  const link = stripAccents(words[0]);
+  if ((link === "de" || link === "of") && words.length === 2 && !isArticle(words[1])) return null;
+  if (content[0][0] !== content[0][0].toUpperCase()) return null;
+  return name;
+}
+
 function normalizeModality(value: unknown): Modality | null {
   if (typeof value !== "string") return null;
   const clean = stripAccents(value.toLowerCase().trim()).replace(/[\s_]+/g, "-");
-  const mods = MODALITIES as readonly string[];
-  if (mods.includes(clean)) return clean as Modality;
+  if (MODALITY_ALIASES[clean]) return MODALITY_ALIASES[clean];
   for (const ending of ["es", "s"]) {
     if (clean.endsWith(ending)) {
       const singular = clean.slice(0, -ending.length);
-      if (mods.includes(singular)) return singular as Modality;
+      if (MODALITY_ALIASES[singular]) return MODALITY_ALIASES[singular];
     }
   }
   return null;
@@ -228,19 +383,30 @@ function sentencesFor(modality: Modality | null, sourceText: string): string {
     .join(" ");
 }
 
+function nearestModality(text: string, term: string): Modality | null {
+  const low = text.toLowerCase();
+  const idx = low.indexOf(term.toLowerCase());
+  if (idx === -1) return null;
+  return nearestModalityAt(low, idx);
+}
+
+function nearestModalityAt(low: string, pos: number): Modality | null {
+  let best: { mod: Modality; dist: number } | null = null;
+  for (const [re, mod] of MODALITY_KEYWORDS) {
+    for (const m of low.matchAll(new RegExp(re.source, "gi"))) {
+      const dist = Math.abs((m.index ?? 0) - pos);
+      if (!best || dist < best.dist) best = { mod, dist };
+    }
+  }
+  return best?.mod ?? null;
+}
+
 function rescueClient(sourceText: string): string | null {
   const m = sourceText.match(
-    /(hospital|cl[ií]nica|centro m[eé]dico|centro|policl[ií]nica|sanatorio)\s+([^,.;]+?)(?:,|\.| en | hay |$)/i,
+    /(hospital|cl[ií]nica|clinic|centro m[eé]dico|policl[ií]nica|sanatorio|centro)\s+([^,.;]+?)(?:,|\.| en | hay |$)/i,
   );
   if (!m?.[1] || !m?.[2]) return null;
-  const words = m[2].trim().split(/\s+/);
-  if (words.length === 0 || words[0] !== words[0][0]?.toUpperCase() + words[0].slice(1)) return null;
-  const isArticle = (w: string) => ["de", "del", "la", "el", "los", "las"].includes(w.toLowerCase());
-  const content = words.filter((w) => !isArticle(w));
-  // "policlínica de David" (solo ciudad) no es un nombre; exige nombre propio real.
-  if (isArticle(words[0]) && content.length < 2) return null;
-  const name = `${m[1][0]?.toUpperCase()}${m[1].slice(1).toLowerCase()} ${m[2].trim()}`.trim();
-  return name.length > 60 ? null : name;
+  return acceptClient(`${m[1]} ${m[2].trim()}`);
 }
 
 function rescueQuantity(modality: Modality | null, anchor: string): number | null {
@@ -248,7 +414,8 @@ function rescueQuantity(modality: Modality | null, anchor: string): number | nul
   if (modality) {
     const kw = MODALITY_KEYWORDS.find(([, m]) => m === modality)?.[0].source;
     if (kw) {
-      const m = low.match(new RegExp(`${NUMBER_TOKEN}\\s*(?:de\\s+)?${kw}`, "i"));
+      const filler = String.raw`(?:equipos?|sistemas?|unidades?)\s+(?:de\s+)?`;
+      const m = low.match(new RegExp(`${NUMBER_TOKEN}\\s*(?:${filler})?(?:de\\s+)?${kw}`, "i"));
       const n = m?.[1] ? parseNum(m[1]) : null;
       if (n && n > 0) return n;
     }
@@ -289,15 +456,12 @@ function rescueAge(anchor: string, nowYear = new Date().getFullYear()): number |
 // ponytail: los modelos Q4 pequeños alucinan marcas y confunden modalidad.
 // Estas reglas blindan el borrador: solo vale lo que aparece literal en el texto,
 // y la modalidad/cantidad se rescatan por palabras clave en español.
-export function groundDraft(draft: ObservationDraft, sourceText: string): ObservationDraft {
+export function groundDraft(draft: ObservationDraft, sourceText: string, englishText?: string): ObservationDraft {
   const low = sourceText.toLowerCase();
+  const evidenceSrc = (englishText ?? sourceText).toLowerCase();
   const foundModalities = MODALITY_KEYWORDS.filter(([re]) => re.test(low)).map(([, m]) => m);
   const uniqueModalities = [...new Set(foundModalities)];
-  // Un cliente real es un nombre corto con prefijo de instalación; lo demás es el modelo divagando.
-  const rawClient = draft.client && draft.client.length <= 60 ? draft.client : null;
-  const prefixed =
-    rawClient && FACILITY_PREFIXES.some((p) => stripAccents(rawClient).startsWith(p)) ? rawClient : null;
-  const client = prefixed ?? rescueClient(sourceText);
+  const client = acceptClient(draft.client) ?? rescueClient(sourceText);
   const seen = new Set<string>();
   const keyOf = (e: EquipmentDraft) =>
     [e.modality, e.quantity, e.brand, e.model, e.ageYears, e.evidence].join("|");
@@ -306,42 +470,53 @@ export function groundDraft(draft: ObservationDraft, sourceText: string): Observ
   const unattributable = (e: EquipmentDraft) => !e.modality && !e.evidence;
   const items = draft.equipment.map((e) => {
       const grounded = { ...e };
-      for (const field of ["brand", "model"] as const) {
-        const value = grounded[field];
-        if (
-          value &&
-          (!low.includes(value.toLowerCase()) ||
-            value.length > 40 ||
-            value.split(/\s+/).length > 4 ||
-            MODALITY_KEYWORDS.some(([re]) => re.test(value)))
-        ) {
-          grounded[field] = null;
-        }
-      }
-      if (grounded.evidence && !low.includes(grounded.evidence.toLowerCase().slice(0, 20))) {
+      // Determinar modalidad primero: evidencia → única modalidad → corrección por evidencia.
+      if (grounded.evidence && !evidenceSrc.includes(grounded.evidence.toLowerCase().slice(0, 20))) {
         grounded.evidence = null;
       }
       if (!grounded.modality && grounded.evidence) {
         const anchor = grounded.evidence.toLowerCase();
         grounded.modality = MODALITY_KEYWORDS.find(([re]) => re.test(anchor))?.[1] ?? null;
       }
-      // Sin evidencia solo se atribuye si el texto menciona una única modalidad.
       if (!grounded.modality && !grounded.evidence && uniqueModalities.length === 1) {
         grounded.modality = uniqueModalities[0];
       }
-      // La evidencia manda: si menciona otra modalidad conocida, corrige la etiqueta.
       if (grounded.modality && grounded.evidence) {
         const anchor = grounded.evidence.toLowerCase();
         const inEvidence = MODALITY_KEYWORDS.find(([re]) => re.test(anchor))?.[1];
         if (inEvidence && inEvidence !== grounded.modality) grounded.modality = inEvidence;
       }
-      // Cantidad y edad se recalculan siempre del texto: el modelo las inventa con frecuencia.
-      // La edad exige atribución: evidencia o frases que mencionen esa modalidad.
-      const anchor = `${grounded.evidence ?? ""} ${sourceText}`;
+      // Marca/modelo: solo se aceptan si aparecen en el texto Y su modalidad más cercana coincide.
+      for (const field of ["brand", "model"] as const) {
+        const value = grounded[field];
+        if (!value) continue;
+        const appears = low.includes(value.toLowerCase());
+        const tooLong = value.length > 40 || value.split(/\s+/).length > 4;
+        const isModality = MODALITY_KEYWORDS.some(([re]) => re.test(value));
+        const near = grounded.modality ? nearestModality(sourceText, value) : null;
+        const wrongModality = near !== null && near !== grounded.modality;
+        if (!appears || tooLong || isModality || wrongModality) grounded[field] = null;
+      }
+      // Cantidad y edad ancladas a la frase de la modalidad, no al texto completo.
+      const modalitySentence = grounded.modality ? sentencesFor(grounded.modality, sourceText) : "";
+      const anchor = `${grounded.evidence ?? ""} ${modalitySentence || sourceText}`;
       grounded.quantity = rescueQuantity(grounded.modality, anchor);
-      grounded.ageYears = rescueAge(
-        `${grounded.evidence ?? ""} ${sentencesFor(grounded.modality, sourceText)}`,
-      );
+      grounded.ageYears = rescueAge(anchor);
+      // Proximity de edad: si la mención está más cerca de OTRA modalidad, anular.
+      if (grounded.ageYears !== null && grounded.modality) {
+        const low2 = sourceText.toLowerCase();
+        const norm = low2.normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+        const s = String(grounded.ageYears);
+        const wordForm = Object.entries(WORD_TO_NUM).find(([, n]) => n === grounded.ageYears)?.[0];
+        const ageM = norm.match(new RegExp(`(?:${s}|${wordForm ?? ""})\\s+anos?`));
+        const year = new Date().getFullYear() - grounded.ageYears;
+        const yearM = low2.match(new RegExp(`\\b${year}\\b`));
+        const pos = ageM?.index ?? yearM?.index;
+        if (pos !== undefined && pos !== null) {
+          const near = nearestModalityAt(low2, pos);
+          if (near && near !== grounded.modality) grounded.ageYears = null;
+        }
+      }
       return grounded;
     })
     .filter((e) => {

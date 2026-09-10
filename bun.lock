@@ -3,7 +3,7 @@
   "configVersion": 1,
   "workspaces": {
     "": {
-      "name": "ia-local",
+      "name": "baseiq-local",
       "dependencies": {
         "@qvac/sdk": "^0.19.0",
         "vue": "^3.5.41",

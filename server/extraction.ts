@@ -1,21 +1,21 @@
-import { EXTRACTION_SCHEMA, normalizeDraft, nextQuestion, groundDraft, type ObservationDraft } from "../shared/observation";
+import { EXTRACTION_SCHEMA, normalizeDraft, nextQuestion, groundDraft, toEnglishObservation, type ObservationDraft } from "../shared/observation";
 import { inferJson } from "./qvac";
 
+// caveman lite (JuliusBrussee): no filler/hedging. Qwen extract template: JSON only, absent=null, no invent.
 const SYSTEM =
-  "You extract hospital inventory from Spanish field observations. Reply ONLY with the schema JSON. " +
-  "CRITICAL RULE: if the text does not mention a datum, its value is null. Inventing a brand, model or age absent from the text is a serious error. " +
-  "Example: for «Vi un tomógrafo en Hospital X» you must return " +
-  '{"client":"Hospital X","city":null,"country":null,"equipment":[{"modality":"tomografo","quantity":1,"brand":null,"model":null,"ageYears":null,"evidence":"Vi un tomógrafo"}],"missing":["city","country","brand","model","ageYears"]}. ' +
-  "modality is exactly one of: resonador, tomografo, ecografo, rayos-x, mamografo, otra. " +
-  "evidence must be a short literal quote of the original Spanish text. " +
-  "missing lists absent fields among client, city, country, modality, quantity, brand, model, ageYears. /no_think";
+  "Extract inventory. JSON only. No invent. Absent field = null. Keep original names. " +
+  "modality: MRI | CT | ultrasound | X-ray | mammograph | other. evidence: short quote. " +
+  "client = named hospital/clinic. clinic of city only = null. " +
+  'in: I saw CT at Hospital X  out: {"client":"Hospital X","city":null,"country":null,"equipment":[{"modality":"CT","quantity":1,"brand":null,"model":null,"ageYears":null,"evidence":"I saw CT"}],"missing":["city","country","brand","model","ageYears"]} ' +
+  "/no_think";
 
 export async function extractObservation(text: string): Promise<{ draft: ObservationDraft; question: string | null; inferMs: number }> {
   let lastError: unknown = null;
+  const english = toEnglishObservation(text).slice(0, 2000);
   for (let attempt = 0; attempt < 2; attempt++) {
     try {
-      const { text: raw, inferMs } = await inferJson(SYSTEM, text.slice(0, 2000), EXTRACTION_SCHEMA);
-      const draft = groundDraft(normalizeDraft(JSON.parse(raw.trim())), text);
+      const { text: raw, inferMs } = await inferJson(SYSTEM, english, EXTRACTION_SCHEMA);
+      const draft = groundDraft(normalizeDraft(JSON.parse(raw.trim())), text, english);
       draft.missing = computeMissing(draft);
       return { draft, question: nextQuestion(draft), inferMs };
     } catch (err) {
@@ -33,9 +33,6 @@ function computeMissing(draft: ObservationDraft): string[] {
   for (const e of draft.equipment) {
     if (!e.modality) missing.add("modality");
     if (e.quantity === null) missing.add("quantity");
-    if (!e.brand) missing.add("brand");
-    if (!e.model) missing.add("model");
-    if (e.ageYears === null) missing.add("ageYears");
   }
   return [...missing];
 }

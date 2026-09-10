@@ -6,7 +6,7 @@ import OverviewDashboard from "./components/OverviewDashboard.vue";
 import { api, type OverviewResult } from "./services/api";
 import type { ObservationRecord } from "../shared/observation";
 
-const status = ref<{ ready: boolean; model: string; lastInferMs: number | null }>({ ready: false, model: "", lastInferMs: null });
+const status = ref<{ ready: boolean; model: string; device: "gpu" | "cpu" | null; lastInferMs: number | null }>({ ready: false, model: "", device: null, lastInferMs: null });
 const observations = ref<ObservationRecord[]>([]);
 const overview = ref<OverviewResult | null>(null);
 
@@ -33,6 +33,7 @@ onMounted(refresh);
     </div>
     <p class="pill" :data-ready="status.ready">
       {{ status.ready ? "● IA local lista" : "○ cargando modelo…" }}
+      <span v-if="status.device">{{ status.device.toUpperCase() }}</span>
       <span v-if="status.lastInferMs !== null">{{ (status.lastInferMs / 1000).toFixed(1) }} s</span>
     </p>
   </header>
@@ -40,7 +41,7 @@ onMounted(refresh);
     <ObservationCapture @saved="refresh" />
     <div class="cols">
       <ClientInstalledBase :observations="observations" />
-      <OverviewDashboard :overview="overview" />
+      <OverviewDashboard :overview="overview" :observations="observations" />
     </div>
   </main>
   <footer>100% en el dispositivo · QVAC {{ status.model }} · datos sintéticos</footer>

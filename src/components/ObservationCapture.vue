@@ -50,7 +50,7 @@ async function runExtraction(input: string) {
   }
 }
 
-async function confirm(status: "Confirmado" | "Reportado" | "Estimado") {
+async function confirm(status: "Confirmado" | "Reportado" | "Estimado" | "Desconocido") {
   if (!draft.value || !result.value || saving.value) return;
   if (!draft.value.client) {
     error.value = "Falta el cliente: complétalo antes de guardar.";
@@ -161,6 +161,7 @@ function updateEquipment(index: number, field: string, value: string) {
         <button class="primary" :disabled="saving" @click="confirm('Confirmado')">Confirmar</button>
         <button :disabled="saving" @click="confirm('Reportado')">Guardar como reportado</button>
         <button :disabled="saving" @click="confirm('Estimado')">Guardar como estimado</button>
+        <button :disabled="saving" @click="confirm('Desconocido')">Sin confirmar</button>
       </div>
     </div>
   </section>

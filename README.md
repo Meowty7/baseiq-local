@@ -54,11 +54,16 @@ bun test                  # 15 pruebas unitarias
 QVAC_CONFIG_PATH=./qvac.config.json bun run scripts/qvac-smoke.ts   # gate QVAC
 QVAC_CONFIG_PATH=./qvac.config.json bun run evaluate   # 12 casos, falla si no pasa umbrales
 bun run build && bun run start   # producción: http://127.0.0.1:3001
+# Termux (un comando, desde la raíz): bash scripts/termux-start.sh
 ```
+
+Hay que estar en la raíz del repo (`src/App.vue` tiene que existir). `start` sirve `dist/`; sin `build` no hay UI.
 
 Desarrollo: `bun run dev` (Vite, proxy `/api` → :3001) + `bun run dev:server`.
 
 Primera ejecución descarga el modelo a `.qvac/` (fuera de Git). Después funciona con Wi‑Fi desconectado.
+
+El arranque elige GPU si hay una visible (`getSystemResources` + `/dev/dri` o `/dev/nvidia0`); si la carga falla, cae a CPU solo. Forzar: `QVAC_DEVICE=cpu` o `QVAC_DEVICE=gpu`.
 
 ## Limitaciones conocidas
 

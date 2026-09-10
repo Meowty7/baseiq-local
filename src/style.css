@@ -73,6 +73,14 @@ main { display: flex; flex-direction: column; gap: 20px; }
 
 .cols { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
 @media (max-width: 820px) { .cols { grid-template-columns: 1fr; } }
+@media (max-width: 640px) {
+  #app { padding: 12px 12px 28px; }
+  h1 { font-size: 26px; }
+  .top { flex-direction: column; align-items: stretch; }
+  .pill { white-space: normal; }
+  .card { padding: 14px; }
+  .table360 { display: block; overflow-x: auto; }
+}
 
 .card {
   background: var(--card);
@@ -169,3 +177,12 @@ footer {
 .obs details { margin-top: 4px; font-size: 14px; }
 .obs summary { cursor: pointer; color: var(--teal-deep); font-weight: 600; min-height: 44px; display: inline-flex; align-items: center; }
 .obs .source { background: var(--paper); border: 1px solid var(--line); border-radius: 6px; padding: 8px 10px; margin: 6px 0; }
+
+.table360 { width: 100%; border-collapse: collapse; margin: 8px 0 12px; font-size: 0.9rem; }
+.table360 th, .table360 td { text-align: left; padding: 6px 10px; border-bottom: 1px solid var(--line); }
+.table360 th { font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.04em; color: var(--ink-soft); }
+.table360 td { color: var(--ink); }
+
+.geo-node { margin: 4px 0; }
+.geo-node > summary { cursor: pointer; font-weight: 600; color: var(--teal-deep); padding: 4px 0; }
+.geo-node > summary::marker { color: var(--teal); }

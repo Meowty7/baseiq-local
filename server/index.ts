@@ -1,17 +1,47 @@
+import { existsSync } from "node:fs";
 import { getDb, saveObservation, listObservations, closeDb } from "./db";
 import { extractObservation } from "./extraction";
-import { ensureModel, isReady, isBusy, getLastInferMs, shutdown, MODEL_NAME } from "./qvac";
-import { OBSERVATION_STATUSES, SOURCE_TYPES, freshness, detectConflicts } from "../shared/observation";
+import { ensureModel, isReady, isBusy, getLastInferMs, getDevice, shutdown, MODEL_NAME } from "./qvac";
+import { OBSERVATION_STATUSES, SOURCE_TYPES, freshness, detectConflicts, groundDraft, normalizeDraft, toEnglishObservation } from "../shared/observation";
+import fixtures from "../fixtures/observations.es.json";
 
 const PORT = Number(process.env.PORT ?? 3001);
 const DIST = "./dist";
+if (!existsSync(`${DIST}/index.html`)) {
+  console.error("✖ falta dist/. En la raíz del repo: bun run build && bun run start");
+  process.exit(1);
+}
 
 const db = getDb();
 
 ensureModel((pct) => {
   if (Math.round(pct) % 20 === 0) console.log(`▸ model ${pct.toFixed(0)}%`);
-}).then(() => console.log("▸ QVAC ready"))
-  .catch((err) => console.error("✖ model preload failed:", err));
+}).then(async () => {
+  console.log("▸ QVAC ready");
+  if (process.env.SKIP_SEED === "1") return;
+  await seedIfEmpty();
+}).catch((err) => console.error("✖ model preload failed:", err));
+
+async function seedIfEmpty() {
+  const count = db.query("SELECT COUNT(*) AS n FROM observations;").get() as { n: number };
+  if (count.n > 0) return;
+  console.log("▸ Seeding fixtures…");
+  for (const fx of fixtures as { text: string; expect: { client: string | null; city: string | null; country: string | null; modalities: string[] } }[]) {
+    try {
+      const { draft } = await extractObservation(fx.text);
+      const client = draft.client ?? fx.expect.client;
+      if (!client) continue;
+      saveObservation(db, {
+        client, city: draft.city ?? fx.expect.city, country: draft.country ?? fx.expect.country,
+        status: "Reportado", sourceText: fx.text,
+        submittedBy: "seed", observedAt: "2026-09-01", sourceType: "visita", comments: null, confirmedAt: null,
+      }, draft.equipment);
+    } catch (err) {
+      console.error("✖ seed failed:", fx.text.slice(0, 40), err);
+    }
+  }
+  console.log("▸ Seed complete");
+}
 
 function json(data: unknown, status = 200): Response {
   return Response.json(data, { status });
@@ -24,7 +54,7 @@ const server = Bun.serve({
     const url = new URL(req.url);
 
     if (url.pathname === "/api/status") {
-      return json({ ready: isReady(), busy: isBusy(), model: MODEL_NAME, lastInferMs: getLastInferMs() });
+      return json({ ready: isReady(), busy: isBusy(), model: MODEL_NAME, device: getDevice(), lastInferMs: getLastInferMs() });
     }
 
     if (url.pathname === "/api/extractions" && req.method === "POST") {
@@ -66,8 +96,15 @@ const server = Bun.serve({
       }
       const status = body.status as (typeof OBSERVATION_STATUSES)[number];
       const str = (v: unknown) => (typeof v === "string" && v.trim() ? v.trim() : null);
-      const id = saveObservation(db, {
+      const reGrounded = groundDraft(normalizeDraft({
         client: body.client.trim(),
+        city: typeof body.city === "string" ? body.city : null,
+        country: typeof body.country === "string" ? body.country : null,
+        equipment: body.equipment as never,
+        missing: [],
+      }), body.sourceText, toEnglishObservation(body.sourceText));
+      const id = saveObservation(db, {
+        client: reGrounded.client ?? body.client.trim(),
         city: typeof body.city === "string" ? body.city : null,
         country: typeof body.country === "string" ? body.country : null,
         status,
@@ -77,7 +114,7 @@ const server = Bun.serve({
         sourceType: str(body.sourceType),
         comments: str(body.comments),
         confirmedAt: status === "Confirmado" ? new Date().toISOString() : null,
-      }, body.equipment as never);
+      }, reGrounded.equipment);
       return json({ id }, 201);
     }
 

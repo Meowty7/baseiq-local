@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { normalizeDraft, rankMissing, nextQuestion, groundDraft } from "../shared/observation";
+import { normalizeDraft, rankMissing, nextQuestion, groundDraft, toEnglishObservation, aggregate360 } from "../shared/observation";
 
 describe("normalizeDraft", () => {
   test("acepta extracción completa y valida rangos", () => {
@@ -11,6 +11,38 @@ describe("normalizeDraft", () => {
     expect(d.client).toBe("Hospital DemoCare");
     expect(d.equipment[0].modality).toBe("resonador");
     expect(d.equipment[0].ageYears).toBe(8);
+  });
+
+  test("toEnglishObservation traduce el dominio y deja nombres propios", () => {
+    const en = toEnglishObservation(
+      "Estoy en Hospital DemoCare Pacific, en Panamá. Vi dos resonadores y un tomógrafo.",
+    );
+    expect(en).toContain("Hospital DemoCare Pacific");
+    expect(en).toContain("Panamá");
+    expect(en).toMatch(/MRI/);
+    expect(en).toMatch(/CT/);
+    expect(en).not.toMatch(/resonador|tom[oó]grafo/i);
+    expect(en).toMatch(/^I am at /);
+  });
+
+  test("mapea alias ingleses de modalidad al token del schema", () => {
+    const cases: [string, string][] = [
+      ["CT", "tomografo"],
+      ["CT scanner", "tomografo"],
+      ["MRI", "resonador"],
+      ["ultrasound", "ecografo"],
+      ["X-ray", "rayos-x"],
+      ["mammograph", "mamografo"],
+      ["other", "otra"],
+    ];
+    for (const [raw, id] of cases) {
+      const d = normalizeDraft({
+        client: null, city: null, country: null,
+        equipment: [{ modality: raw, quantity: 1, brand: null, model: null, ageYears: null, evidence: null }],
+        missing: [],
+      });
+      expect(d.equipment[0].modality).toBe(id);
+    }
   });
 
   test("convierte ausencias e inválidos a null", () => {
@@ -94,6 +126,26 @@ describe("grounding avanzado", () => {
     }), "Un ecógrafo nuevo.");
     expect(n.equipment[0].ageYears).toBe(0);
   });
+  test("atribuye marca y edad a la modalidad correcta, no a otra", () => {
+    const t = "Hospital Valle Serena en Madrid. Un tomógrafo Medtron de tres años y dos equipos de rayos X sin marca visible.";
+    const d = groundDraft(normalizeDraft({
+      client: "Hospital Valle Serena", city: "Madrid", country: null,
+      equipment: [
+        { modality: "tomografo", quantity: 1, brand: "Medtron", model: null, ageYears: 3, evidence: "Un tomógrafo Medtron" },
+        { modality: "rayos-x", quantity: 1, brand: "Medtron", model: null, ageYears: 3, evidence: "dos equipos de rayos X" },
+      ],
+      missing: [],
+    }), t);
+    const tomo = d.equipment.find((e) => e.modality === "tomografo");
+    const rayos = d.equipment.find((e) => e.modality === "rayos-x");
+    expect(tomo?.brand).toBe("Medtron");
+    expect(tomo?.ageYears).toBe(3);
+    expect(tomo?.quantity).toBe(1);
+    expect(rayos?.brand).toBeNull();
+    expect(rayos?.ageYears).toBeNull();
+    expect(rayos?.quantity).toBe(2);
+  });
+
   test("cliente sin prefijo de instalación se anula", () => {
     const d = groundDraft(normalizeDraft({
       client: "En la policlínica de David hay tres ecógrafos", city: "David", country: null,
@@ -127,13 +179,44 @@ describe("conflictos", () => {
   });
 });
 
+describe("aggregate360", () => {
+  test("agrega por cliente×modalidad sin doble conteo", () => {
+    const base = { city: null, country: "Panamá", missing: [], sourceText: "t", createdAt: "2026-09-10T00:00:00.000Z", submittedBy: null, observedAt: "2026-09-10", sourceType: "visita", comments: null, confirmedAt: null } as const;
+    const obs = [
+      { ...base, id: 1, client: "Hospital A", status: "Reportado", equipment: [{ modality: "resonador", quantity: 2, brand: null, model: null, ageYears: 8, evidence: null }] },
+      { ...base, id: 2, client: "Hospital A", status: "Confirmado", equipment: [{ modality: "resonador", quantity: 3, brand: null, model: null, ageYears: 10, evidence: null }] },
+    ] as never;
+    const rows = aggregate360(obs);
+    expect(rows.length).toBe(1);
+    expect(rows[0].client).toBe("Hospital A");
+    expect(rows[0].modality).toBe("resonador");
+    expect(rows[0].quantity).toBe(5);
+    expect(rows[0].ageRange).toBe("8–10");
+    expect(rows[0].confidence).toBe("Confirmado");
+    expect(rows[0].observations).toBe(2);
+  });
+});
+
 describe("rescueClient", () => {
-  test("rescata nombre con prefijo y rechaza solo-ciudad", async () => {
-    const { groundDraft, normalizeDraft } = await import("../shared/observation");
+  test("rescata nombre con prefijo y rechaza solo-ciudad", () => {
     const empty = { client: null, city: null, country: null, equipment: [], missing: [] };
     const hit = groundDraft(normalizeDraft(empty), "Clínica Páramo Verde, Bogotá. Un mamógrafo nuevo.");
     expect(hit.client).toBe("Clínica Páramo Verde");
+    const faro = groundDraft(normalizeDraft(empty), "Hospital del Faro Austral, Buenos Aires. Un resonador.");
+    expect(faro.client).toBe("Hospital del Faro Austral");
+    const istmo = groundDraft(normalizeDraft(empty), "Centro Médico del Istmo, Ciudad de México. Dos tomógrafos.");
+    expect(istmo.client).toBe("Centro Médico del Istmo");
     const miss = groundDraft(normalizeDraft(empty), "En la policlínica de David, Panamá, hay tres ecógrafos.");
     expect(miss.client).toBeNull();
+  });
+
+  test("anula solo-ciudad aunque el modelo copie el prefijo", () => {
+    const src = "En la policlínica de David, Panamá, hay tres ecógrafos.";
+    for (const fake of ["Policlínica de David", "Policlínica de David, Panamá", "Polyclinic of David"]) {
+      const d = groundDraft(normalizeDraft({
+        client: fake, city: "David", country: "Panamá", equipment: [], missing: [],
+      }), src);
+      expect(d.client).toBeNull();
+    }
   });
 });

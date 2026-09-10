@@ -1,7 +1,9 @@
 <script setup lang="ts">
+import { computed } from "vue";
 import type { OverviewResult } from "../services/api";
+import type { ObservationRecord } from "../../shared/observation";
 
-defineProps<{ overview: OverviewResult | null }>();
+const props = defineProps<{ overview: OverviewResult | null; observations: ObservationRecord[] }>();
 
 const MODALITY_LABELS: Record<string, string> = {
   resonador: "Resonadores",
@@ -15,6 +17,27 @@ const MODALITY_LABELS: Record<string, string> = {
 function maxOf(entries: [string, number][]): number {
   return Math.max(1, ...entries.map(([, n]) => n));
 }
+
+const geoTree = computed(() => {
+  const tree = new Map<string, Map<string, Map<string, number>>>();
+  for (const o of props.observations) {
+    const country = o.country ?? "Sin país";
+    const city = o.city ?? "Sin ciudad";
+    const client = o.client ?? "Sin cliente";
+    const cities = tree.get(country) ?? new Map();
+    const clients = cities.get(city) ?? new Map();
+    clients.set(client, (clients.get(client) ?? 0) + 1);
+    cities.set(city, clients);
+    tree.set(country, cities);
+  }
+  return [...tree.entries()].map(([country, cities]) => ({
+    country,
+    cities: [...cities.entries()].map(([city, clients]) => ({
+      city,
+      clients: [...clients.entries()].map(([client, n]) => ({ client, n })),
+    })),
+  }));
+});
 </script>
 
 <template>
@@ -29,11 +52,17 @@ function maxOf(entries: [string, number][]): number {
         <div class="bar"><div :style="{ width: `${(n / maxOf(Object.entries(overview.byModality))) * 100}%` }" /></div>
         <b>{{ n }}</b>
       </div>
-      <h3>Por país</h3>
-      <p class="chips">
-        <span v-for="([k, n]) in Object.entries(overview.byCountry)" :key="k" class="chip">{{ k }} · {{ n }}</span>
-        <span v-if="Object.keys(overview.byCountry).length === 0" class="muted">Sin datos de país.</span>
-      </p>
+      <h3>Mapa geográfico</h3>
+      <details v-for="g in geoTree" :key="g.country" class="geo-node">
+        <summary>{{ g.country }} ({{ g.cities.reduce((a, c) => a + c.clients.reduce((b, cl) => b + cl.n, 0), 0) }} obs.)</summary>
+        <details v-for="c in g.cities" :key="c.city" class="geo-node" style="margin-left: 1rem">
+          <summary>{{ c.city }} ({{ c.clients.reduce((a, cl) => a + cl.n, 0) }})</summary>
+          <ul style="margin-left: 2rem">
+            <li v-for="cl in c.clients" :key="cl.client">{{ cl.client }} ({{ cl.n }})</li>
+          </ul>
+        </details>
+      </details>
+      <p v-if="geoTree.length === 0" class="muted">Sin datos geográficos.</p>
       <h3>Oportunidades de renovación <small>(≥ 7 años)</small></h3>
       <ul v-if="overview.renewals.length > 0" class="renew">
         <li v-for="(r, i) in overview.renewals" :key="i">
