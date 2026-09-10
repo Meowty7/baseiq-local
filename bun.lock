@@ -6,10 +6,11 @@
       "name": "baseiq-local",
       "dependencies": {
         "@qvac/sdk": "^0.19.0",
+        "bare-runtime": "^1.32.0",
         "vue": "^3.5.41",
       },
       "devDependencies": {
-        "@types/node": "^24.13.3",
+        "@types/node": "^24.13.4",
         "@vitejs/plugin-vue": "^6.0.8",
         "@vue/tsconfig": "^0.9.1",
         "typescript": "~6.0.2",
@@ -279,7 +280,7 @@
 
     "bare-stylize": ["bare-stylize@0.0.1", "", { "dependencies": { "bare-ansi-escapes": "^2.2.3", "bare-process": "^4.2.1" } }, "sha512-l3MjmIl476bWijYWf3RbE+osl4iuXSOMudzp0vAqzIK7gPgn/+G3oAxp8Oin9CFF911KBP0LO9kts8Ci8mGZaQ=="],
 
-    "bare-subprocess": ["bare-subprocess@5.2.3", "", { "dependencies": { "bare-env": "^3.0.0", "bare-events": "^2.5.4", "bare-os": "^3.0.1", "bare-pipe": "^4.0.0", "bare-url": "^2.2.2" }, "peerDependencies": { "bare-buffer": "*" }, "optionalPeers": ["bare-buffer"] }, "sha512-07wwswlV7M3sC9IykbZRZ/jHAkrXFWVLqdBWGv1y0ojCimtRD9hGwxdHmR5FUFmDUZLNsBmTYJNQqgio5+A85Q=="],
+    "bare-subprocess": ["bare-subprocess@6.1.0", "", { "dependencies": { "bare-env": "^3.0.0", "bare-events": "^2.5.4", "bare-os": "^3.0.1", "bare-pipe": "^4.2.0", "bare-structured-clone": "^1.5.2", "bare-tcp": "^2.4.1", "bare-url": "^2.2.2" }, "peerDependencies": { "bare-buffer": "*" }, "optionalPeers": ["bare-buffer"] }, "sha512-8L6KtbmreDy4Fc1BdDqaDo9fg0nbedUmTSFQxYPV0uHIM2BBAX8+E0LyMDKgkk0I+mlKto80WYzOnIhT8VDdOg=="],
 
     "bare-tcp": ["bare-tcp@2.6.1", "", { "dependencies": { "bare-dns": "^2.0.4", "bare-events": "^2.5.4", "bare-stream": "^2.6.4" }, "peerDependencies": { "bare-pipe": "*" }, "optionalPeers": ["bare-pipe"] }, "sha512-8f8UFP7O27gIGaVWJPysQ2am8LSD6YCuVSbnTbOrQjUD0RkWEZexvi2Q66P99MLxSephlyjoU0mLxWmozRJMnA=="],
 
@@ -589,10 +590,12 @@
 
     "@qvac/decoder-audio/@qvac/infer-base": ["@qvac/infer-base@0.4.2", "", { "dependencies": { "@qvac/error": "^0.1.0", "@qvac/logging": "^0.1.0", "bare-events": "^2.9.1", "bare-os": "^3.2.0", "bare-path": "^3.0.0" }, "optionalDependencies": { "@qvac/diagnostics": "^0.1.0" } }, "sha512-Vm5V/3a0oMBdxjfUpZxXrV+xRMLHeXrnKjKwOJSh+y85nRi7Ux+8Iakj4QAsfbrsERWkSTxUQM34KlE9Rb4PdA=="],
 
+    "@qvac/tts-ggml/bare-subprocess": ["bare-subprocess@5.2.3", "", { "dependencies": { "bare-env": "^3.0.0", "bare-events": "^2.5.4", "bare-os": "^3.0.1", "bare-pipe": "^4.0.0", "bare-url": "^2.2.2" }, "peerDependencies": { "bare-buffer": "*" }, "optionalPeers": ["bare-buffer"] }, "sha512-07wwswlV7M3sC9IykbZRZ/jHAkrXFWVLqdBWGv1y0ojCimtRD9hGwxdHmR5FUFmDUZLNsBmTYJNQqgio5+A85Q=="],
+
     "bare-process/bare-signals": ["bare-signals@5.0.0", "", { "dependencies": { "bare-events": "^2.5.3" } }, "sha512-8Gn8bBFUh2AUCJ9wWWFjSGWIo1HIUSIQnXRJGSm/f7GCDMqsuJhRmR1dT+HtDaDBkeu2l8Koxt2JLurfJ5yHVw=="],
 
-    "bare-runtime/bare-subprocess": ["bare-subprocess@6.1.0", "", { "dependencies": { "bare-env": "^3.0.0", "bare-events": "^2.5.4", "bare-os": "^3.0.1", "bare-pipe": "^4.2.0", "bare-structured-clone": "^1.5.2", "bare-tcp": "^2.4.1", "bare-url": "^2.2.2" }, "peerDependencies": { "bare-buffer": "*" }, "optionalPeers": ["bare-buffer"] }, "sha512-8L6KtbmreDy4Fc1BdDqaDo9fg0nbedUmTSFQxYPV0uHIM2BBAX8+E0LyMDKgkk0I+mlKto80WYzOnIhT8VDdOg=="],
-
     "bare-tty/bare-signals": ["bare-signals@5.0.0", "", { "dependencies": { "bare-events": "^2.5.3" } }, "sha512-8Gn8bBFUh2AUCJ9wWWFjSGWIo1HIUSIQnXRJGSm/f7GCDMqsuJhRmR1dT+HtDaDBkeu2l8Koxt2JLurfJ5yHVw=="],
+
+    "brittle/bare-subprocess": ["bare-subprocess@5.2.3", "", { "dependencies": { "bare-env": "^3.0.0", "bare-events": "^2.5.4", "bare-os": "^3.0.1", "bare-pipe": "^4.0.0", "bare-url": "^2.2.2" }, "peerDependencies": { "bare-buffer": "*" }, "optionalPeers": ["bare-buffer"] }, "sha512-07wwswlV7M3sC9IykbZRZ/jHAkrXFWVLqdBWGv1y0ojCimtRD9hGwxdHmR5FUFmDUZLNsBmTYJNQqgio5+A85Q=="],
   }
 }
