@@ -1,5 +1,5 @@
-import { MODEL_NAME, shutdown } from "../server/qvac";
-import { extractObservation } from "../server/extraction";
+import { MODEL_NAME, shutdown } from "../src/lib/qvac";
+import { extractObservation } from "../src/lib/extraction";
 
 const SAMPLE =
   "Estoy en Hospital DemoCare Pacific, en Panamá. Vi dos resonadores y un tomógrafo. Uno de los resonadores parece de unos ocho años.";

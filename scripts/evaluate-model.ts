@@ -1,5 +1,5 @@
-import { shutdown, ensureModel, MODEL_NAME } from "../server/qvac";
-import { extractObservation } from "../server/extraction";
+import { shutdown, ensureModel, MODEL_NAME } from "../src/lib/qvac";
+import { extractObservation } from "../src/lib/extraction";
 import fixtures from "../fixtures/observations.es.json";
 
 await ensureModel();
@@ -58,9 +58,10 @@ latencies.sort((a, b) => a - b);
 const n = fixtures.length;
 const totalQty = (fixtures as { expect: { quantities: Record<string, number> } }[]).reduce((s, fx) => s + Object.keys(fx.expect.quantities).length, 0);
 const p95 = latencies[Math.min(n - 1, Math.floor(n * 0.95))];
+const mean = Math.round(latencies.reduce((s, t) => s + t, 0) / n);
 console.log(`\nmodel=${MODEL_NAME} n=${n}`);
 console.log(`valid=${valid}/${n} client=${clientHit}/${n} city=${cityHit}/${n} country=${countryHit}/${n} modality=${modalityHit}/${n} quantity=${quantityHit}/${totalQty} halluc=${hallucinations}`);
-console.log(`latency p50=${latencies[Math.floor(n / 2)]}ms p95=${p95}ms`);
+console.log(`latency mean=${mean}ms p50=${latencies[Math.floor(n / 2)]}ms p95=${p95}ms`);
 
 const pass = valid === n && clientHit >= 11 && modalityHit >= 11 && hallucinations === 0 && p95 <= 6000;
 console.log(pass ? "EVALUATE PASS" : "EVALUATE FAIL");

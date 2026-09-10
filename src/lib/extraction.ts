@@ -1,7 +1,6 @@
-import { EXTRACTION_SCHEMA, normalizeDraft, nextQuestion, groundDraft, toEnglishObservation, type ObservationDraft } from "../shared/observation";
+import { EXTRACTION_SCHEMA, normalizeDraft, nextQuestion, groundDraft, toEnglishObservation, type ObservationDraft } from "../../shared/observation";
 import { inferJson } from "./qvac";
 
-// caveman lite (JuliusBrussee): no filler/hedging. Qwen extract template: JSON only, absent=null, no invent.
 const SYSTEM =
   "Extract inventory. JSON only. No invent. Absent field = null. Keep original names. " +
   "modality: MRI | CT | ultrasound | X-ray | mammograph | other. evidence: short quote. " +

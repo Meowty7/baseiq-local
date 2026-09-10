@@ -2,30 +2,33 @@
   "name": "baseiq-local",
   "private": true,
   "version": "0.1.0",
-  "type": "module",
+  "main": "node_modules/expo/AppEntry.js",
   "scripts": {
-    "dev": "vite",
-    "dev:server": "bun run server/index.ts",
-    "build": "vue-tsc -b && vite build",
-    "preview": "vite preview",
-    "start": "bun run server/index.ts",
-    "termux": "bash scripts/termux-start.sh",
-    "typecheck": "vue-tsc -b",
-    "test": "bun test",
-    "evaluate": "bun run scripts/evaluate-model.ts",
-    "qvac:smoke": "bun run scripts/qvac-smoke.ts"
+    "start": "expo start --dev-client",
+    "android": "expo run:android --device",
+    "ios": "expo run:ios --device",
+    "prebuild": "expo prebuild",
+    "typecheck": "tsc --noEmit",
+    "test": "bun test"
   },
   "dependencies": {
     "@qvac/sdk": "^0.19.0",
-    "bare-runtime": "^1.32.0",
-    "vue": "^3.5.41"
+    "bare-rpc": "^1.0.0",
+    "expo": "~57.0.21",
+    "expo-build-properties": "~57.0.17",
+    "expo-device": "~57.0.1",
+    "expo-file-system": "~57.0.6",
+    "expo-sqlite": "~57.0.2",
+    "expo-status-bar": "~3.0.9",
+    "hermes-compiler": "^250829098.0.19",
+    "react": "19.1.0",
+    "react-native": "0.86.3",
+    "react-native-bare-kit": "^0.11.5"
   },
   "devDependencies": {
-    "@types/node": "^24.13.4",
-    "@vitejs/plugin-vue": "^6.0.8",
-    "@vue/tsconfig": "^0.9.1",
-    "typescript": "~6.0.2",
-    "vite": "^8.2.2",
-    "vue-tsc": "^3.3.11"
+    "@babel/core": "^7.25.0",
+    "@types/react": "~19.1.0",
+    "bare-pack": "^1.5.1",
+    "typescript": "~5.9.2"
   }
 }

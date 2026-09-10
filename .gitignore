@@ -18,6 +18,14 @@ data/
 .tgrep/
 *.docx
 
+# Expo / Android
+android/
+ios/
+.expo/
+*.tsbuildinfo
+.playwright-mcp/
+package-lock.json
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json

@@ -1,0 +1,27 @@
+{
+  "expo": {
+    "name": "BaseIQ Local",
+    "slug": "baseiq-local",
+    "version": "0.1.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "dark",
+    "newArchEnabled": true,
+    "android": {
+      "package": "dev.belta.baseiq",
+      "minSdkVersion": 29,
+      "permissions": []
+    },
+    "plugins": [
+      [
+        "expo-build-properties",
+        {
+          "android": {
+            "minSdkVersion": 29
+          }
+        }
+      ],
+      "@qvac/sdk/expo-plugin",
+      "expo-sqlite"
+    ]
+  }
+}
