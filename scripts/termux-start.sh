@@ -61,6 +61,22 @@ is_elf() {
   [ -f "$1" ] && [ "$(od -An -N4 -tx1 "$1" 2>/dev/null | tr -d ' \n')" = "7f454c46" ]
 }
 
+# `timeout` de GNU coreutils no viene por defecto en Termux. Sin cota, un
+# addon que se cuelga esperando un driver que no existe congela el arranque
+# para siempre — ya nos pasó una vez con Vulkan.
+run_with_timeout() {
+  local secs="$1"; shift
+  "$@" &
+  local pid=$!
+  ( sleep "$secs"; kill -KILL "$pid" 2>/dev/null ) &
+  local watcher=$!
+  local rc=0
+  wait "$pid" 2>/dev/null || rc=$?
+  kill "$watcher" 2>/dev/null
+  wait "$watcher" 2>/dev/null
+  return "$rc"
+}
+
 wrap_bare_bin() {
   local bin="$1"
   is_elf "$bin" || return 0
@@ -118,6 +134,39 @@ graft_sdk_cache() {
   bun -e 'await import("bare-runtime/spawn"); await import("@qvac/rag/errors"); await import("@qvac/inference/surface"); await import("@qvac/sdk"); console.log("▸ imports-ok")'
 }
 
+# El addon LLaMA carga sus backends (CPU/Vulkan/OpenCL) por dlopen desde
+# prebuilds/android-arm64/.../*.so al registrarse. Sin un loader Vulkan real
+# esa carga puede quedarse esperando para siempre en vez de fallar rápido
+# (visto en pruebas: cuelgue total del arranque). `vulkan-loader-android`
+# (paquete de Termux, no `vulkan-loader-generic`) conecta con el driver
+# Vulkan que Android ya trae — no requiere pantalla, pero solo existe en
+# algunos SoCs (Adreno vía Turnip; Mali/Tensor no siempre andan).
+try_enable_gpu() {
+  local bin="$1"
+  local gpu_dir="$ROOT/node_modules/@qvac/llm-llamacpp/prebuilds/android-arm64/qvac__llm-llamacpp"
+  local so
+  echo "▸ probando GPU (Vulkan)…"
+  if ! pkg install -y vulkan-loader-android >/dev/null 2>&1; then
+    echo "▸ vulkan-loader-android no disponible en este dispositivo → CPU"
+    return 0
+  fi
+  for so in libqvac-ggml-vulkan.so libqvac-ggml-opencl.so; do
+    [ -f "$gpu_dir/$so.off" ] && mv "$gpu_dir/$so.off" "$gpu_dir/$so"
+  done
+  if run_with_timeout 20 "$bin" "$ROOT/scripts/termux-gpu-probe.mjs" >"$TMPDIR/gpu-probe.out" 2>"$TMPDIR/gpu-probe.err" \
+     && grep -q gpu-probe-ok "$TMPDIR/gpu-probe.out" 2>/dev/null; then
+    echo "▸ GPU disponible — QVAC_DEVICE=gpu"
+    export QVAC_DEVICE="gpu"
+  else
+    echo "▸ GPU no responde en 20s o falló — vuelvo a CPU"
+    cat "$TMPDIR/gpu-probe.out" "$TMPDIR/gpu-probe.err" 2>/dev/null | tail -20 || true
+    for so in libqvac-ggml-vulkan.so libqvac-ggml-opencl.so; do
+      [ -f "$gpu_dir/$so" ] && mv "$gpu_dir/$so" "$gpu_dir/$so.off"
+    done
+    export QVAC_DEVICE="cpu"
+  fi
+}
+
 ensure_qvac_native() {
   if [ "$in_termux" -eq 1 ]; then
     export TMPDIR="${PREFIX:-/data/data/com.termux/files/usr}/tmp"
@@ -148,11 +197,7 @@ ensure_qvac_native() {
     fi
     echo "▸ bare-ok"
     graft_sdk_cache
-    local gpu_dir="$ROOT/node_modules/@qvac/llm-llamacpp/prebuilds/android-arm64/qvac__llm-llamacpp"
-    local so
-    for so in libqvac-ggml-vulkan.so libqvac-ggml-opencl.so; do
-      [ -f "$gpu_dir/$so" ] && mv "$gpu_dir/$so" "$gpu_dir/$so.off"
-    done
+    try_enable_gpu "$bin"
     return
   fi
   if [ ! -d node_modules/@qvac/sdk ]; then
