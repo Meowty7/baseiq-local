@@ -427,7 +427,8 @@ function rescueQuantity(modality: Modality | null, anchor: string): number | nul
       const filler = String.raw`(?:equipos?|sistemas?|unidades?)\s+(?:de\s+)?`;
       const m = low.match(new RegExp(`${NUMBER_TOKEN}\\s*(?:${filler})?(?:de\\s+)?${kw}`, "i"));
       const n = m?.[1] ? parseNum(m[1]) : null;
-      if (n && n > 0) return n;
+      // Un año (p. ej. "instalado en 2018") nunca es una cantidad de equipos.
+      if (n && n > 0 && n <= 99) return n;
     }
   }
   if (modality) {
@@ -436,7 +437,7 @@ function rescueQuantity(modality: Modality | null, anchor: string): number | nul
   }
   const generic = low.match(new RegExp(NUMBER_TOKEN, "i"))?.[1];
   const n = generic ? parseNum(generic) : null;
-  return n && n > 0 ? n : null;
+  return n && n > 0 && n <= 99 ? n : null;
 }
 
 function rescueAge(anchor: string, nowYear = new Date().getFullYear()): number | null {

@@ -76,6 +76,51 @@ export function saveObservation(
   });
 }
 
+export function updateObservationClient(
+  d: SQLiteDatabase, id: number, clientName: string, city: string | null, country: string | null,
+): void {
+  d.withTransactionSync(() => {
+    d.runSync("INSERT INTO clients (name, city, country) VALUES (?, ?, ?) ON CONFLICT(name) DO NOTHING;",
+      [clientName, city, country]);
+    const client = d.getFirstSync("SELECT id FROM clients WHERE name = ?;", clientName) as { id: number };
+    d.runSync("UPDATE observations SET client_id = ? WHERE id = ?;", [client.id, id]);
+  });
+}
+
+const OBSERVATION_COLUMNS: Record<string, string> = {
+  city: "city", country: "country", status: "status", submittedBy: "submitted_by",
+  observedAt: "observed_at", sourceType: "source_type", comments: "comments", confirmedAt: "confirmed_at",
+};
+
+export function updateObservation(
+  d: SQLiteDatabase, id: number,
+  fields: Partial<{ city: string | null; country: string | null; status: ObservationStatus; submittedBy: string | null; observedAt: string | null; sourceType: string | null; comments: string | null; confirmedAt: string | null }>,
+): void {
+  const entries = Object.entries(fields).filter(([k]) => k in OBSERVATION_COLUMNS);
+  if (entries.length === 0) return;
+  const sets = entries.map(([k]) => `${OBSERVATION_COLUMNS[k]} = ?`).join(", ");
+  const values = entries.map(([, v]) => v as string | number | null);
+  d.runSync(`UPDATE observations SET ${sets} WHERE id = ?;`, [...values, id]);
+}
+
+export function updateEquipment(
+  d: SQLiteDatabase, observationId: number,
+  equipment: { modality: string | null; quantity: number | null; brand: string | null; model: string | null; ageYears: number | null; evidence: string | null }[],
+): void {
+  d.withTransactionSync(() => {
+    d.runSync("DELETE FROM equipment WHERE observation_id = ?;", [observationId]);
+    for (const e of equipment) {
+      d.runSync(
+        "INSERT INTO equipment (observation_id, modality, quantity, brand, model, age_years, evidence) VALUES (?, ?, ?, ?, ?, ?, ?);",
+        [observationId, e.modality, e.quantity, e.brand, e.model, e.ageYears, e.evidence]);
+    }
+  });
+}
+
+export function deleteObservation(d: SQLiteDatabase, id: number): void {
+  d.runSync("DELETE FROM observations WHERE id = ?;", [id]);
+}
+
 export function listObservations(d: SQLiteDatabase): ObservationRecord[] {
   const rows = d.getAllSync(`SELECT o.id, c.name AS client, o.city, o.country, o.status, o.source_text, o.created_at,
     o.submitted_by, o.observed_at, o.source_type, o.comments, o.confirmed_at

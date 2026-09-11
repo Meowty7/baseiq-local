@@ -1,6 +1,9 @@
 import { useCallback, useEffect, useState } from "react";
 import * as FileSystem from "expo-file-system";
-import { getDb, listObservations, saveObservation, clearAll } from "./db";
+import {
+  getDb, listObservations, saveObservation, clearAll,
+  updateObservation, updateObservationClient, updateEquipment, deleteObservation,
+} from "./db";
 import { ensureModel, isReady, isBusy, getLastInferMs, getDevice, setDeviceOverride, MODEL_NAME } from "./qvac";
 import { extractObservation } from "./extraction";
 import {
@@ -153,5 +156,26 @@ export function useStore() {
     return id;
   }, [refresh]);
 
-  return { status, observations, overview, progress, refresh, extract, save };
+  const update = useCallback((id: number, input: {
+    client?: string; city?: string | null; country?: string | null;
+    status?: ObservationStatus; submittedBy?: string | null; observedAt?: string | null;
+    sourceType?: string | null; comments?: string | null;
+    equipment?: ObservationDraft["equipment"];
+  }): void => {
+    const db = getDb();
+    const { client, equipment, ...rest } = input;
+    if (client) updateObservationClient(db, id, client.trim(), input.city ?? null, input.country ?? null);
+    const fields: Record<string, string | number | null> = {};
+    for (const [k, v] of Object.entries(rest)) if (v !== undefined) fields[k] = v as string | number | null;
+    if (Object.keys(fields).length > 0) updateObservation(db, id, fields);
+    if (equipment) updateEquipment(db, id, equipment);
+    refresh();
+  }, [refresh]);
+
+  const remove = useCallback((id: number): void => {
+    deleteObservation(getDb(), id);
+    refresh();
+  }, [refresh]);
+
+  return { status, observations, overview, progress, refresh, extract, save, update, remove };
 }

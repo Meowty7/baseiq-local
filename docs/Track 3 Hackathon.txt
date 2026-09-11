@@ -1,0 +1,10 @@
+Track 03
+Desafío General: Sovereign Intelligence at the Edge
+$6,000
+Construye una solución de inteligencia artificial que funcione donde la nube no llega, no debería llegar o cuesta demasiado.
+Qué buscamos Una aplicación que resuelva un problema real, con inferencia ejecutada en el dispositivo o delegada entre pares. El tema es libre. Como orientación, los espacios donde QVAC marca la diferencia son la conectividad intermitente, los datos sensibles que no pueden salir del dispositivo, el trabajo en campo, la accesibilidad y los agentes locales que ejecutan acciones. Ninguno es obligatorio y ninguno tiene premio propio.
+Requisito técnico La solución debe construirse con el SDK de QVAC (qvac.tether.io), preferentemente con los modelos que QVAC pone a disposición. Enrutar la inferencia a una API en la nube descalifica la entrega de forma directa, sin importar la calidad del resto del trabajo. Usar la nube para funciones ajenas a la inferencia, como alojar una interfaz, no infringe esta regla. Se valora de forma adicional el uso de Pears para la comunicación o la delegación de inferencia entre pares. No es obligatorio: una solución que corre íntegramente en el dispositivo compite en igualdad de condiciones.
+Entregables Antes del 11 de septiembre a las 8:00, hora de Panamá: Repositorio accesible para el jurado durante todo el periodo de evaluación. No se exige licencia abierta. Video demostrativo de máximo cinco minutos, con enlace accesible sin credenciales. Es lo primero que revisa el jurado.
+Toda base preexistente debe declararse en el README. Omitirla descalifica.
+Evaluación Technical 35%, Innovation 25%, Impact 20%, Design 10%, Completion 10%. Hay un único ranking general. En caso de empate decide el mayor puntaje en Technical, luego en Impact, y por último el voto del presidente del jurado.
+Premios Primer lugar: 3,000 USDT Segundo lugar: 2,000 USDT Tercer lugar: 1,000 USDT
