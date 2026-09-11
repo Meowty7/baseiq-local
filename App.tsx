@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useFonts } from "expo-font";
 import { Inter_400Regular, Inter_500Medium, Inter_600SemiBold } from "@expo-google-fonts/inter";
 import {
-  BackHandler, PanResponder, Platform, Pressable, SafeAreaView, StatusBar, StyleSheet, Text, View,
+  Animated, BackHandler, Dimensions, PanResponder, Platform, Pressable, SafeAreaView, StatusBar, StyleSheet, Text, ToastAndroid, View,
 } from "react-native";
 import { useStore } from "./src/lib/store";
 import { ObservationCapture, type ObservationCaptureHandle } from "./src/components/ObservationCapture";
@@ -20,6 +20,7 @@ const TABS: { key: Tab; icon: string; label: string }[] = [
 
 const SWIPE_DISTANCE = 60;
 const SWIPE_DIRECTION_RATIO = 2;
+const EXIT_PRESS_WINDOW_MS = 2000;
 
 export default function App() {
   return (
@@ -37,6 +38,7 @@ function AppShell() {
   const [activeTab, setActiveTab] = useState<Tab>("capture");
   const activeTabRef = useRef(activeTab);
   activeTabRef.current = activeTab;
+  const [tabBarHeight, setTabBarHeight] = useState(0);
   const [captureBusy, setCaptureBusy] = useState(false);
   const onCaptureBusy = useCallback((busy: boolean) => setCaptureBusy(busy), []);
   const [focusClient, setFocusClient] = useState<string | null>(null);
@@ -50,10 +52,32 @@ function AppShell() {
   const captureRef = useRef<ObservationCaptureHandle>(null);
   const recordsRef = useRef<RecordsTabHandle>(null);
 
+  const screenWidth = Dimensions.get("window").width;
+  const activeIndex = TABS.findIndex((t) => t.key === activeTab);
+  // Tracks live drag offset (in the -1..1 tab-width range) on top of the
+  // settled position for the active tab, so the whole row slides under the
+  // finger and springs the rest of the way on release instead of just
+  // popping to the new panel.
+  const dragX = useRef(new Animated.Value(0)).current;
+  const trackX = useRef(new Animated.Value(-activeIndex * screenWidth)).current;
+
+  useEffect(() => {
+    Animated.spring(trackX, {
+      toValue: -activeIndex * screenWidth,
+      useNativeDriver: true,
+      bounciness: 6,
+      speed: 16,
+    }).start();
+  }, [activeIndex, screenWidth, trackX]);
+
+  const lastBackPressRef = useRef(0);
+
   // Android's back gesture/button used to exit the app straight from any tab.
   // Now it unwinds one step at a time: cancel an in-progress edit or draft
-  // review first, then clear a client filter, then go back to Captura, and
-  // only exit once there's nothing left to back out of.
+  // review first, then clear a client filter, then go back to Captura. Once
+  // there's nothing left to unwind, it follows the standard Android pattern
+  // of requiring a second press within a couple seconds to actually exit,
+  // so a single stray back press from the resting state can't kill the app.
   useEffect(() => {
     if (Platform.OS !== "android") return;
     const sub = BackHandler.addEventListener("hardwareBackPress", () => {
@@ -70,7 +94,11 @@ function AppShell() {
         setActiveTab("capture");
         return true;
       }
-      return false;
+      const now = Date.now();
+      if (now - lastBackPressRef.current < EXIT_PRESS_WINDOW_MS) return false;
+      lastBackPressRef.current = now;
+      ToastAndroid.show("Pulsa de nuevo para salir", ToastAndroid.SHORT);
+      return true;
     });
     return () => sub.remove();
   }, []);
@@ -79,11 +107,25 @@ function AppShell() {
     PanResponder.create({
       onMoveShouldSetPanResponder: (_, g) =>
         Math.abs(g.dx) > 20 && Math.abs(g.dx) > Math.abs(g.dy) * SWIPE_DIRECTION_RATIO,
+      onPanResponderMove: (_, g) => {
+        const idx = TABS.findIndex((t) => t.key === activeTabRef.current);
+        // Resist dragging past the first/last tab instead of letting it slide into empty space.
+        if ((idx === 0 && g.dx > 0) || (idx === TABS.length - 1 && g.dx < 0)) {
+          dragX.setValue(g.dx / 3);
+        } else {
+          dragX.setValue(g.dx);
+        }
+      },
       onPanResponderRelease: (_, g) => {
         const idx = TABS.findIndex((t) => t.key === activeTabRef.current);
+        dragX.setValue(0);
         if (g.dx <= -SWIPE_DISTANCE && idx < TABS.length - 1) setActiveTab(TABS[idx + 1].key);
         else if (g.dx >= SWIPE_DISTANCE && idx > 0) setActiveTab(TABS[idx - 1].key);
+        else {
+          Animated.spring(trackX, { toValue: -idx * screenWidth, useNativeDriver: true, bounciness: 6, speed: 16 }).start();
+        }
       },
+      onPanResponderTerminate: () => dragX.setValue(0),
     }),
   ).current;
 
@@ -116,18 +158,25 @@ function AppShell() {
       </View>
 
       <View style={styles.body} {...panResponder.panHandlers}>
-        <View style={[styles.panel, activeTab !== "capture" && styles.panelHidden]} pointerEvents={activeTab === "capture" ? "auto" : "none"}>
-          <ObservationCapture ref={captureRef} store={store} onBusyChange={onCaptureBusy} />
-        </View>
-        {activeTab === "records" && (
-          <RecordsTab ref={recordsRef} store={store} focusClient={focusClient} onClearFocus={() => setFocusClient(null)} />
-        )}
-        {activeTab === "insights" && (
-          <InsightsTab overview={store.overview} observations={store.observations} onViewClient={goToRecords} />
-        )}
+        <Animated.View
+          style={[
+            styles.track,
+            { width: screenWidth * TABS.length, transform: [{ translateX: Animated.add(trackX, dragX) }] },
+          ]}
+        >
+          <View style={[styles.panel, { width: screenWidth }]} pointerEvents={activeTab === "capture" ? "auto" : "none"}>
+            <ObservationCapture ref={captureRef} store={store} onBusyChange={onCaptureBusy} tabBarHeight={tabBarHeight} />
+          </View>
+          <View style={[styles.panel, { width: screenWidth }]} pointerEvents={activeTab === "records" ? "auto" : "none"}>
+            <RecordsTab ref={recordsRef} store={store} focusClient={focusClient} onClearFocus={() => setFocusClient(null)} />
+          </View>
+          <View style={[styles.panel, { width: screenWidth }]} pointerEvents={activeTab === "insights" ? "auto" : "none"}>
+            <InsightsTab overview={store.overview} observations={store.observations} onViewClient={goToRecords} />
+          </View>
+        </Animated.View>
       </View>
 
-      <View style={styles.tabBar}>
+      <View style={styles.tabBar} onLayout={(e) => setTabBarHeight(e.nativeEvent.layout.height)}>
         {TABS.map((tab) => {
           const active = activeTab === tab.key;
           return (
@@ -162,9 +211,9 @@ function makeStyles(theme: Theme) {
     dot: { width: 6, height: 6, borderRadius: 3 },
     themeBtn: { paddingHorizontal: 4, paddingVertical: 2, flexShrink: 0, marginLeft: 8 },
     themeBtnIcon: { fontSize: 18 },
-    body: { flex: 1 },
-    panel: { ...StyleSheet.absoluteFill },
-    panelHidden: { opacity: 0 },
+    body: { flex: 1, overflow: "hidden" },
+    track: { flex: 1, flexDirection: "row" },
+    panel: { height: "100%" },
     tabBar: { flexDirection: "row", backgroundColor: color.surface, borderTopWidth: 1, borderTopColor: color.border, paddingBottom: 18, paddingTop: 6 },
     tabBtn: { flex: 1, alignItems: "center", paddingVertical: 10 },
     tabInner: { alignItems: "center", gap: 2 },

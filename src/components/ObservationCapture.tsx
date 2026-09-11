@@ -32,8 +32,8 @@ export interface ObservationCaptureHandle {
   handleBack: () => boolean;
 }
 
-export const ObservationCapture = forwardRef<ObservationCaptureHandle, { store: Store; onBusyChange?: (busy: boolean) => void }>(
-  function ObservationCapture({ store, onBusyChange }, ref) {
+export const ObservationCapture = forwardRef<ObservationCaptureHandle, { store: Store; onBusyChange?: (busy: boolean) => void; tabBarHeight?: number }>(
+  function ObservationCapture({ store, onBusyChange, tabBarHeight = 0 }, ref) {
   const { theme } = useTheme();
   const styles = makeStyles(theme);
   const [messages, setMessages] = useState<Msg[]>(() => [msg("assistant", GREETING)]);
@@ -60,16 +60,17 @@ export const ObservationCapture = forwardRef<ObservationCaptureHandle, { store: 
   }, [loading, saving, onBusyChange]);
 
   useEffect(() => {
-    // KeyboardAvoidingView shrinks itself by comparing its own bottom edge to the
-    // keyboard's top — but the tab bar below this screen (a sibling in App.tsx,
-    // outside this component) isn't part of that math, so the shrink comes up
-    // short by roughly the tab bar's height and the composer stays partly under
-    // the keyboard. Measuring the keyboard height directly and padding the
-    // composer with it sidesteps that miscalculation entirely on Android (iOS's
-    // "padding" behavior already accounts for this correctly on its own).
+    // Android's default windowSoftInputMode (adjustResize) already shrinks the
+    // whole app window when the keyboard shows, which pushes the tab bar (a
+    // sibling in App.tsx, outside this component) up above the keyboard on its
+    // own. That shrink already accounts for the tab bar's height, so padding
+    // the composer with the *full* reported keyboard height double-counts it —
+    // that's what left a gap the size of the tab bar between the composer and
+    // the keyboard. Subtracting the tab bar's measured height here cancels out
+    // that double-count. (iOS's "padding" behavior needs none of this.)
     if (Platform.OS !== "android") return;
     const showSub = Keyboard.addListener("keyboardDidShow", (e) => {
-      setAndroidKeyboardHeight(e.endCoordinates.height);
+      setAndroidKeyboardHeight(Math.max(0, e.endCoordinates.height - tabBarHeight));
       scrollRef.current?.scrollToEnd({ animated: true });
     });
     const hideSub = Keyboard.addListener("keyboardDidHide", () => setAndroidKeyboardHeight(0));
@@ -77,7 +78,7 @@ export const ObservationCapture = forwardRef<ObservationCaptureHandle, { store: 
       showSub.remove();
       hideSub.remove();
     };
-  }, []);
+  }, [tabBarHeight]);
 
   useEffect(() => {
     if (!loading) {
