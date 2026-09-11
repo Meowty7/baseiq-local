@@ -274,6 +274,30 @@ export function nextQuestionField(draft: ObservationDraft): { field: string; equ
   return top ? { field: top.field, equipmentIndex: top.equipmentIndex } : null;
 }
 
+function missingKey(c: { field: string; equipmentIndex: number | null }): string {
+  return c.equipmentIndex == null ? c.field : `${c.field}.${c.equipmentIndex}`;
+}
+
+/**
+ * Same ranking as nextQuestionField, but skips any candidate whose key
+ * (e.g. "brand.0", "location") is in `skip` — for the review-after-save
+ * flow, where the user can skip one field at a time without it reappearing.
+ */
+export function nextQuestionFieldExcluding(
+  draft: ObservationDraft,
+  skip: ReadonlySet<string>,
+): { field: string; equipmentIndex: number | null } | null {
+  const top = scoreMissing(draft).find((c) => !skip.has(missingKey(c)));
+  return top ? { field: top.field, equipmentIndex: top.equipmentIndex } : null;
+}
+
+export function nextQuestionExcluding(draft: ObservationDraft, skip: ReadonlySet<string>, lang?: string): string | null {
+  const top = nextQuestionFieldExcluding(draft, skip);
+  if (!top) return null;
+  const equipmentNumber = top.equipmentIndex != null && draft.equipment.length > 1 ? top.equipmentIndex + 1 : undefined;
+  return getQuestion(top.field, lang ?? "es", equipmentNumber);
+}
+
 export const MODALITY_GLOSSARY: { id: Modality; es: string; en: string }[] = [
   { id: "resonador", es: "resonador", en: "MRI" },
   { id: "tomografo", es: "tomógrafo", en: "CT" },

@@ -1,5 +1,9 @@
 import { describe, expect, test } from "bun:test";
-import { normalizeDraft, rankMissing, nextQuestion, nextQuestionField, groundDraft, toEnglishObservation, aggregate360 } from "../shared/observation";
+import {
+  normalizeDraft, rankMissing, nextQuestion, nextQuestionField,
+  nextQuestionFieldExcluding, nextQuestionExcluding,
+  groundDraft, toEnglishObservation, aggregate360,
+} from "../shared/observation";
 
 describe("normalizeDraft", () => {
   test("acepta extracción completa y valida rangos", () => {
@@ -107,6 +111,25 @@ describe("missing priority", () => {
     expect(rankMissing(d)).toEqual(["brand.0", "brand.1"]);
     expect(nextQuestionField(d)).toEqual({ field: "brand", equipmentIndex: 0 });
     expect(nextQuestion(d)).toContain("1");
+  });
+
+  test("excluding a skipped field moves on to the next missing one, without it reappearing", () => {
+    const d = normalizeDraft({
+      client: "H", city: null, country: "P",
+      equipment: [{ modality: null, quantity: 1, brand: null, model: null, ageYears: null, evidence: null }],
+      missing: ["city", "modality", "brand.0"],
+    });
+    // Unskipped: modality (its base value beats location's).
+    expect(nextQuestionFieldExcluding(d, new Set())?.field).toBe("modality");
+    // Skip modality: next is location (city/country).
+    expect(nextQuestionFieldExcluding(d, new Set(["modality"]))?.field).toBe("location");
+    // Skip modality and location: next is the enrichment field.
+    const skipped = new Set(["modality", "location"]);
+    expect(nextQuestionFieldExcluding(d, skipped)).toEqual({ field: "brand", equipmentIndex: 0 });
+    expect(nextQuestionExcluding(d, skipped)).toContain("marca");
+    // Skip everything: nothing left to ask.
+    expect(nextQuestionFieldExcluding(d, new Set(["modality", "location", "brand.0"]))).toBeNull();
+    expect(nextQuestionExcluding(d, new Set(["modality", "location", "brand.0"]))).toBeNull();
   });
 });
 

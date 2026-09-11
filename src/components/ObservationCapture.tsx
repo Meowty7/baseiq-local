@@ -1,7 +1,7 @@
 import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from "react";
 import { getDevice } from "../lib/qvac";
 import { ActivityIndicator, Keyboard, KeyboardAvoidingView, Platform, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
-import { appendFollowUp, MODALITIES, type Modality, type ObservationDraft } from "../../shared/observation";
+import { appendFollowUp, MODALITIES, nextQuestion, nextQuestionExcluding, nextQuestionFieldExcluding, type Modality, type ObservationDraft } from "../../shared/observation";
 import { type useStore, OBSERVATION_STATUSES, SOURCE_TYPES } from "../lib/store";
 import { Button, Card, Input, Select } from "../ui/primitives";
 import { radius, space, useTheme, type Theme } from "../ui/theme";
@@ -27,31 +27,8 @@ interface Msg {
 const msgId = () => `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
 const msg = (role: Msg["role"], text: string, caption?: string): Msg => ({ id: msgId(), role, text, caption });
 
-/** Reads back the human-readable value a just-answered field now holds, for the confirmation prompt. */
-function describeFieldValue(
-  field: { field: string; equipmentIndex: number | null },
-  draft: ObservationDraft,
-  labels: Record<string, string>,
-): string | null {
-  const eq = field.equipmentIndex != null ? draft.equipment[field.equipmentIndex] : undefined;
-  switch (field.field) {
-    case "client": return draft.client;
-    case "location": return [draft.city, draft.country].filter(Boolean).join(", ") || null;
-    case "city": return draft.city;
-    case "country": return draft.country;
-    case "modality": {
-      const last = [...draft.equipment].reverse().find((e) => e.modality);
-      return last?.modality ? labels[last.modality] ?? last.modality : null;
-    }
-    case "quantity": {
-      const last = [...draft.equipment].reverse().find((e) => e.quantity != null);
-      return last?.quantity != null ? String(last.quantity) : null;
-    }
-    case "brand": return eq?.brand ?? null;
-    case "model": return eq?.model ?? null;
-    case "ageYears": return eq?.ageYears != null ? String(eq.ageYears) : null;
-    default: return null;
-  }
+function missingFieldKey(f: { field: string; equipmentIndex: number | null }): string {
+  return f.equipmentIndex == null ? f.field : `${f.field}.${f.equipmentIndex}`;
 }
 
 export interface ObservationCaptureHandle {
@@ -77,8 +54,12 @@ export const ObservationCapture = forwardRef<ObservationCaptureHandle, { store: 
   const [draft, setDraft] = useState<ObservationDraft | null>(null);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
-  const [questionSkipped, setQuestionSkipped] = useState(false);
-  const [pendingConfirm, setPendingConfirm] = useState<{ field: { field: string; equipmentIndex: number | null }; value: string; questionText: string } | null>(null);
+  // Entered by pressing Save when the draft still has missing fields: instead
+  // of saving right away, the flow asks about each missing field one at a
+  // time (answer or skip), then shows a final summary to confirm before the
+  // record actually gets written.
+  const [reviewing, setReviewing] = useState(false);
+  const [skippedFields, setSkippedFields] = useState<Set<string>>(new Set());
   const [submittedBy, setSubmittedBy] = useState("");
   const [observedAt, setObservedAt] = useState(new Date().toISOString().slice(0, 10));
   const [sourceType, setSourceType] = useState<(typeof SOURCE_TYPES)[number]>("visita");
@@ -129,7 +110,8 @@ export const ObservationCapture = forwardRef<ObservationCaptureHandle, { store: 
   }, [loading]);
 
   const push = (...items: Msg[]) => setMessages((prev) => [...prev, ...items]);
-  const awaitingAnswer = !!result?.question && !questionSkipped && !pendingConfirm;
+  const reviewQuestionField = draft && reviewing ? nextQuestionFieldExcluding(draft, skippedFields) : null;
+  const awaitingAnswer = reviewing && !!reviewQuestionField;
 
   async function extract() {
     if (text.trim().length < 10 || loading) return;
@@ -137,45 +119,39 @@ export const ObservationCapture = forwardRef<ObservationCaptureHandle, { store: 
     push(msg("user", transcriptRef.current));
     setText("");
     setSaved(false);
-    await runExtraction(transcriptRef.current, null, null);
+    setReviewing(false);
+    await runExtraction(transcriptRef.current, false);
   }
 
   async function answerFollowUp() {
-    if (!result || text.trim().length < 2 || loading) return;
-    const askedField = result.questionField;
-    const askedQuestionText = result.question;
+    if (!draft || !reviewQuestionField || text.trim().length < 2 || loading) return;
     transcriptRef.current = appendFollowUp(transcriptRef.current, text);
     push(msg("user", text.trim()));
     setText("");
-    await runExtraction(transcriptRef.current, askedField, askedQuestionText);
+    await runExtraction(transcriptRef.current, true);
   }
 
-  async function runExtraction(
-    input: string,
-    askedField: { field: string; equipmentIndex: number | null } | null,
-    askedQuestionText: string | null,
-  ) {
+  async function runExtraction(input: string, duringReview: boolean) {
     setLoading(true);
     setError(null);
-    setResult(null);
-    setQuestionSkipped(false);
-    setPendingConfirm(null);
     try {
       const res = await store.extract(input);
       setResult(res);
       setDraft(JSON.parse(JSON.stringify(res.draft)));
+      // A fresh extraction (new observation or an answer given during review)
+      // resets which fields were skipped — the model just re-derived the
+      // whole draft, so a field skipped before may now be filled, and any
+      // still missing deserves to be asked about again in its new context.
+      setSkippedFields(new Set());
       const dev = getDevice()?.toUpperCase() ?? "?";
       const items = [msg("assistant", t("capture.understood"), t("capture.inferCaption", { sec: (res.inferMs / 1000).toFixed(1), device: dev }))];
-      // When this extraction was triggered by answering a follow-up question,
-      // read back the value that field now holds and ask the user to confirm
-      // it before moving on (to the next question, or to save) instead of
-      // silently trusting the model's read of a possibly ambiguous answer.
-      const answeredValue = askedField ? describeFieldValue(askedField, res.draft, labels) : null;
-      if (askedField && askedQuestionText && answeredValue) {
-        setPendingConfirm({ field: askedField, value: answeredValue, questionText: askedQuestionText });
-        items.push(msg("assistant", t("capture.confirmValue", { value: answeredValue })));
-      } else if (res.question) {
-        items.push(msg("assistant", res.question));
+      // Outside review, no question is asked here — that only happens after
+      // the user presses Save. During review, keep going through missing
+      // fields one at a time, or wrap up with the final summary once none
+      // are left (nothing is saved until the user confirms that summary).
+      if (duringReview) {
+        const q = nextQuestion(res.draft, lang);
+        items.push(msg("assistant", q ?? t("capture.reviewDone")));
       }
       push(...items);
     } catch (e) {
@@ -191,20 +167,33 @@ export const ObservationCapture = forwardRef<ObservationCaptureHandle, { store: 
     }
   }
 
-  function confirmAnswerCorrect() {
-    if (!pendingConfirm || !result) return;
-    setPendingConfirm(null);
-    if (result.question) push(msg("assistant", result.question));
+  function skipReviewQuestion() {
+    if (!reviewQuestionField || !draft) return;
+    const nextSkipped = new Set(skippedFields).add(missingFieldKey(reviewQuestionField));
+    setSkippedFields(nextSkipped);
+    const q = nextQuestionExcluding(draft, nextSkipped, lang);
+    push(msg("assistant", q ?? t("capture.reviewDone")));
   }
 
-  function confirmAnswerWrong() {
-    if (!pendingConfirm) return;
-    push(msg("assistant", t("capture.confirmRetry")));
-    push(msg("assistant", pendingConfirm.questionText));
-    setPendingConfirm(null);
+  /** Save button: starts the missing-field review if anything's missing, otherwise saves right away. */
+  function startSaveOrReview(nextStatus: (typeof OBSERVATION_STATUSES)[number]) {
+    if (!draft || saving) return;
+    if (!draft.client) {
+      setError(t("capture.missingClient"));
+      return;
+    }
+    if (draft.missing.length > 0) {
+      setReviewing(true);
+      setSkippedFields(new Set());
+      push(msg("assistant", t("capture.reviewStart")));
+      const q = nextQuestion(draft, lang);
+      if (q) push(msg("assistant", q));
+      return;
+    }
+    commitSave(nextStatus);
   }
 
-  function confirm(nextStatus: (typeof OBSERVATION_STATUSES)[number]) {
+  function commitSave(nextStatus: (typeof OBSERVATION_STATUSES)[number]) {
     if (!draft || !result || saving) return;
     if (!draft.client) {
       setError(t("capture.missingClient"));
@@ -224,15 +213,18 @@ export const ObservationCapture = forwardRef<ObservationCaptureHandle, { store: 
         sourceType,
         comments: null,
       });
-      setResult(null);
-      setDraft(null);
-      setText("");
-      setError(null);
-      setSaved(true);
       const summary = draft.equipment
         .map((e) => `${e.quantity ?? "?"} × ${labels[e.modality ?? ""] ?? e.modality ?? t("modality.equipo")}`)
         .join(", ");
-      push(msg("assistant", t("capture.saved", { client: draft.client, summary: summary || t("capture.noEquipment"), status: statuses[nextStatus] ?? nextStatus })));
+      const savedClient = draft.client;
+      setResult(null);
+      setDraft(null);
+      setReviewing(false);
+      setSkippedFields(new Set());
+      setText("");
+      setError(null);
+      setSaved(true);
+      push(msg("assistant", t("capture.saved", { client: savedClient, summary: summary || t("capture.noEquipment"), status: statuses[nextStatus] ?? nextStatus })));
     } catch (e) {
       setError(e instanceof Error ? e.message : "save_failed");
     } finally {
@@ -256,27 +248,37 @@ export const ObservationCapture = forwardRef<ObservationCaptureHandle, { store: 
     setDraft(null);
     setError(null);
     setSaved(false);
-    setQuestionSkipped(false);
-    setPendingConfirm(null);
+    setReviewing(false);
+    setSkippedFields(new Set());
     setText("");
     transcriptRef.current = "";
   }
 
+  /** Leaves the missing-field review and goes back to editing the draft directly, without discarding it. */
+  function cancelReview() {
+    setReviewing(false);
+    setSkippedFields(new Set());
+  }
+
   useImperativeHandle(ref, () => ({
     handleBack: () => {
+      if (reviewing) {
+        cancelReview();
+        return true;
+      }
       if (result || draft || saved) {
         reset();
         return true;
       }
       return false;
     },
-  }), [result, draft, saved]);
+  }), [result, draft, saved, reviewing]);
 
   const toInt = (v: string) => (v.trim() === "" ? null : Number.isFinite(parseInt(v, 10)) ? parseInt(v, 10) : null);
-  // While a just-given answer is awaiting Sí/No confirmation, the composer
-  // shouldn't accept free text — that text would otherwise be sent to extract()
-  // as a brand-new observation instead of resolving the pending confirmation.
-  const canSend = !loading && !pendingConfirm && text.trim().length >= (awaitingAnswer ? 2 : 10);
+  // Once review has run out of questions (showing the final summary), the
+  // composer shouldn't accept free text — that text would otherwise start a
+  // brand-new observation instead of the intended "confirm and save".
+  const canSend = !loading && !(reviewing && !awaitingAnswer) && text.trim().length >= (awaitingAnswer ? 2 : 10);
 
   return (
     <KeyboardAvoidingView style={styles.root} behavior={Platform.OS === "ios" ? "padding" : undefined}>
@@ -299,13 +301,6 @@ export const ObservationCapture = forwardRef<ObservationCaptureHandle, { store: 
                 {getDevice() ? ` · ${getDevice()?.toUpperCase()}` : ""}
               </Text>
             </View>
-          </View>
-        )}
-
-        {pendingConfirm && (
-          <View style={[styles.bubble, styles.assistant, styles.confirmRow]}>
-            <Button label={t("capture.confirmYes")} onPress={confirmAnswerCorrect} style={styles.confirmBtn} />
-            <Button label={t("capture.confirmNo")} variant="secondary" onPress={confirmAnswerWrong} style={styles.confirmBtn} />
           </View>
         )}
 
@@ -336,17 +331,30 @@ export const ObservationCapture = forwardRef<ObservationCaptureHandle, { store: 
             </Card>
 
             <View style={[styles.bubble, styles.assistant, { gap: space.md }]}>
-              <Text style={theme.type.body}>
-                {awaitingAnswer || pendingConfirm
-                  ? t("capture.answerFirst")
-                  : t("capture.readyToSave")}
-              </Text>
-              <Select label={t("capture.status")} value={status} options={OBSERVATION_STATUSES} labels={statuses} onChange={setStatus} placeholder={t("select.placeholder")} />
-              <Button label={t("capture.save")} onPress={() => confirm(status)} loading={saving} disabled={awaitingAnswer || !!pendingConfirm} />
-              {awaitingAnswer && (
-                <Pressable onPress={() => setQuestionSkipped(true)} accessibilityRole="button" hitSlop={8}>
-                  <Text style={styles.link}>{t("capture.skipQuestion")}</Text>
-                </Pressable>
+              {reviewing ? (
+                awaitingAnswer ? (
+                  <>
+                    <Text style={theme.type.body}>{t("capture.answerFirst")}</Text>
+                    <Pressable onPress={skipReviewQuestion} accessibilityRole="button" hitSlop={8}>
+                      <Text style={styles.link}>{t("capture.skipQuestion")}</Text>
+                    </Pressable>
+                  </>
+                ) : (
+                  <>
+                    <Text style={theme.type.body}>{t("capture.reviewSummaryReady")}</Text>
+                    <Select label={t("capture.status")} value={status} options={OBSERVATION_STATUSES} labels={statuses} onChange={setStatus} placeholder={t("select.placeholder")} />
+                    <Button label={t("capture.confirmAndSave")} onPress={() => commitSave(status)} loading={saving} />
+                    <Pressable onPress={cancelReview} accessibilityRole="button" hitSlop={8}>
+                      <Text style={styles.link}>{t("capture.backToEdit")}</Text>
+                    </Pressable>
+                  </>
+                )
+              ) : (
+                <>
+                  <Text style={theme.type.body}>{t("capture.readyToSave")}</Text>
+                  <Select label={t("capture.status")} value={status} options={OBSERVATION_STATUSES} labels={statuses} onChange={setStatus} placeholder={t("select.placeholder")} />
+                  <Button label={t("capture.save")} onPress={() => startSaveOrReview(status)} loading={saving} />
+                </>
               )}
             </View>
           </>
@@ -422,8 +430,6 @@ function makeStyles(theme: Theme) {
     user: { alignSelf: "flex-end", backgroundColor: color.primary },
     caption: { marginTop: space.xs },
     loadingRow: { flexDirection: "row", alignItems: "center", gap: space.sm },
-    confirmRow: { flexDirection: "row", gap: space.sm },
-    confirmBtn: { flex: 1 },
     draftCard: { alignSelf: "stretch", padding: space.md, gap: space.md },
     equipment: { gap: space.sm, paddingTop: space.md, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: color.border },
     pair: { flexDirection: "row", gap: space.sm },
