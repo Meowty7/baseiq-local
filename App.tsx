@@ -1,7 +1,7 @@
 import { useState, useCallback } from "react";
 import { useFonts } from "expo-font";
 import { Inter_400Regular, Inter_500Medium, Inter_600SemiBold } from "@expo-google-fonts/inter";
-import { Pressable, SafeAreaView, StatusBar, StyleSheet, Text, View } from "react-native";
+import { Platform, Pressable, SafeAreaView, StatusBar, StyleSheet, Text, View } from "react-native";
 import { useStore } from "./src/lib/store";
 import { ObservationCapture } from "./src/components/ObservationCapture";
 import { RecordsTab } from "./src/components/RecordsTab";
@@ -102,7 +102,11 @@ function makeStyles(theme: Theme) {
     safe: { flex: 1, backgroundColor: color.bg },
     header: {
       flexDirection: "row", alignItems: "center", justifyContent: "space-between",
-      backgroundColor: color.surface, paddingHorizontal: 16, paddingTop: 12, paddingBottom: 12,
+      backgroundColor: color.surface, paddingHorizontal: 16,
+      // RN's SafeAreaView doesn't inset for the status bar on Android (iOS-only),
+      // so the OS clock/battery/wifi icons were sitting on top of this bar.
+      paddingTop: (Platform.OS === "android" ? StatusBar.currentHeight ?? 24 : 0) + 12,
+      paddingBottom: 12,
       borderBottomWidth: 1, borderBottomColor: color.border,
     },
     aiStatus: { flexDirection: "row", alignItems: "center", gap: 6, flexShrink: 1 },
