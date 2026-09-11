@@ -178,7 +178,7 @@ export function ObservationCapture({ store, onBusyChange }: { store: Store; onBu
   const canSend = !loading && text.trim().length >= (awaitingAnswer ? 2 : 10);
 
   return (
-    <KeyboardAvoidingView style={styles.root} behavior={Platform.OS === "ios" ? "padding" : undefined}>
+    <KeyboardAvoidingView style={styles.root} behavior={Platform.OS === "ios" ? "padding" : "height"}>
       <ScrollView
         ref={scrollRef}
         style={styles.thread}
