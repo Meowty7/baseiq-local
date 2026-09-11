@@ -76,6 +76,7 @@ type QvacState = {
   gpuFailed: boolean;
   deviceOverride: InferDevice | null;
   tail: Promise<void>;
+  nativeUnified: boolean;
   inflight: number;
   translators: Record<string, string>;
   translatorLoading: Record<string, Promise<string>>;
@@ -98,6 +99,7 @@ const st = g.__baseiqQvac ?? (g.__baseiqQvac = {
   gpuFailed: false,
   deviceOverride: null,
   tail: Promise.resolve(),
+  nativeUnified: false,
   inflight: 0,
   translators: {},
   translatorLoading: {},
@@ -114,6 +116,26 @@ st.lastTranslateMs ??= null;
 st.lastTranslateStats ??= null;
 st.translatorTail ??= Promise.resolve();
 st.translatorInflight ??= 0;
+if (!st.nativeUnified) {
+  // LLM + NMT share one Bare worker. Overlapping loadModel/completion on Adreno
+  // never returns (same failure mode as reloading the LLM on HMR).
+  st.tail = Promise.all([st.tail, st.translatorTail]).then(() => {});
+  st.translatorTail = st.tail;
+  st.nativeUnified = true;
+}
+
+function withNativeLock<T>(fn: () => Promise<T>): Promise<T> {
+  const prev = st.tail;
+  let release!: () => void;
+  st.tail = st.translatorTail = new Promise<void>((r) => { release = r; });
+  return prev.then(async () => {
+    try {
+      return await fn();
+    } finally {
+      release();
+    }
+  });
+}
 
 export async function switchModel(key: string): Promise<void> {
   await shutdownLlm();
@@ -189,35 +211,73 @@ function withTimeout<T>(p: Promise<T>, ms: number, code: string): Promise<T> {
   ]);
 }
 
+async function loadLlmLocked(onProgress?: (pct: number) => void): Promise<string> {
+  if (st.modelId) return st.modelId;
+  const preferred = preferredDevice();
+  const run = async () => {
+    try {
+      const id = await withTimeout(loadOn(preferred, onProgress), 120000, "load_timeout");
+      st.device = preferred;
+      console.log(`▸ QVAC device=${st.device} model=${selected.name}`);
+      return id;
+    } catch (err) {
+      if (preferred === "cpu") throw err;
+      st.gpuFailed = true;
+      console.warn(`▸ QVAC GPU load failed, falling back to CPU:`, err instanceof Error ? err.message : err);
+      const id = await withTimeout(loadOn("cpu", onProgress), 120000, "load_timeout");
+      st.device = "cpu";
+      console.log(`▸ QVAC device=${st.device} model=${selected.name}`);
+      return id;
+    }
+  };
+  st.loading = run();
+  try {
+    const id = await st.loading;
+    st.modelId = id;
+    return id;
+  } finally {
+    st.loading = null;
+  }
+}
+
 export function ensureModel(onProgress?: (pct: number) => void): Promise<string> {
   if (st.modelId) return Promise.resolve(st.modelId);
-  if (!st.loading) {
-    st.loading = (async () => {
-      const preferred = preferredDevice();
-      try {
-        const id = await withTimeout(loadOn(preferred, onProgress), 120000, "load_timeout");
-        st.device = preferred;
-        console.log(`▸ QVAC device=${st.device} model=${selected.name}`);
-        return id;
-      } catch (err) {
-        if (preferred === "cpu") throw err;
-        st.gpuFailed = true;
-        console.warn(`▸ QVAC GPU load failed, falling back to CPU:`, err instanceof Error ? err.message : err);
-        const id = await withTimeout(loadOn("cpu", onProgress), 120000, "load_timeout");
-        st.device = "cpu";
-        console.log(`▸ QVAC device=${st.device} model=${selected.name}`);
-        return id;
-      }
-    })().then((id) => {
-      st.modelId = id;
-      st.loading = null;
-      return id;
-    }).catch((err) => {
-      st.loading = null;
-      throw err;
-    });
+  return withNativeLock(() => loadLlmLocked(onProgress));
+}
+
+async function loadTranslatorLocked(from: string, to: string, onProgress?: (pct: number) => void): Promise<string> {
+  const key = pairKey(from, to);
+  if (st.translators[key]) return st.translators[key];
+  if (st.translatorFailed[key]) throw new Error(`translator_failed:${key}`);
+  const src = BERGAMOT_PAIRS[key] ?? bergamotModel(from, to);
+  if (!src) throw new Error(`no_bergamot_pair:${key}`);
+  const run = (async () => {
+    const id = await withTimeout(
+      loadModel({
+        modelSrc: src,
+        modelType: "nmt",
+        modelConfig: { engine: "Bergamot", from, to },
+        onProgress: (p: { percentage: number }) => onProgress?.(p.percentage),
+      } as unknown as Parameters<typeof loadModel>[0]),
+      180000,
+      "load_timeout",
+    );
+    console.log(`▸ QVAC translator=${translatorName(from, to)} device=cpu`);
+    return id;
+  })();
+  st.translatorLoading[key] = run;
+  try {
+    const id = await run;
+    st.translators[key] = id;
+    return id;
+  } catch (err) {
+    const timedOut = err instanceof Error && err.message === "load_timeout";
+    if (!timedOut) st.translatorFailed[key] = true;
+    console.warn(`▸ QVAC translator ${key} load failed:`, err instanceof Error ? err.message : err);
+    throw err;
+  } finally {
+    delete st.translatorLoading[key];
   }
-  return st.loading;
 }
 
 export function ensureTranslator(from: string, to: string, onProgress?: (pct: number) => void): Promise<string | null> {
@@ -225,34 +285,7 @@ export function ensureTranslator(from: string, to: string, onProgress?: (pct: nu
   const key = pairKey(from, to);
   if (st.translators[key]) return Promise.resolve(st.translators[key]);
   if (st.translatorFailed[key] && !st.translatorLoading[key]) return Promise.resolve(null);
-  if (!st.translatorLoading[key]) {
-    st.translatorLoading[key] = (async () => {
-      const src = BERGAMOT_PAIRS[key] ?? bergamotModel(from, to);
-      if (!src) throw new Error(`no_bergamot_pair:${key}`);
-      const id = await withTimeout(
-        loadModel({
-          modelSrc: src,
-          modelType: "nmt",
-          modelConfig: { engine: "Bergamot", from, to },
-          onProgress: (p: { percentage: number }) => onProgress?.(Math.max(1, Math.min(40, p.percentage * 0.4))),
-        } as unknown as Parameters<typeof loadModel>[0]),
-        120000,
-        "load_timeout",
-      );
-      console.log(`▸ QVAC translator=${translatorName(from, to)} device=cpu`);
-      return id;
-    })().then((id) => {
-      st.translators[key] = id;
-      delete st.translatorLoading[key];
-      return id;
-    }).catch((err) => {
-      st.translatorFailed[key] = true;
-      delete st.translatorLoading[key];
-      console.warn(`▸ QVAC translator ${key} load failed:`, err instanceof Error ? err.message : err);
-      throw err;
-    });
-  }
-  return st.translatorLoading[key].catch(() => null);
+  return withNativeLock(() => loadTranslatorLocked(from, to, onProgress)).catch(() => null);
 }
 
 function normalizeTranslateStats(stats: TranslateStats | null | undefined): TranslateStats | null {
@@ -290,22 +323,23 @@ async function runTranslate(id: string, text: string | string[], timeoutMs: numb
 }
 
 async function withTranslatorQueue<T>(from: string, to: string, fn: (id: string) => Promise<T>, onProgress?: (pct: number) => void): Promise<T | null> {
-  const id = await ensureTranslator(from, to, onProgress);
-  if (!id) return null;
-  const prev = st.translatorTail;
-  let release!: () => void;
-  st.translatorTail = new Promise<void>((r) => { release = r; });
-  await prev;
-  st.translatorInflight += 1;
-  try {
-    return await fn(id);
-  } catch (err) {
-    console.warn(`▸ QVAC translate ${from}->${to} failed:`, err instanceof Error ? err.message : err);
-    return null;
-  } finally {
-    st.translatorInflight = Math.max(0, st.translatorInflight - 1);
-    release();
-  }
+  return withNativeLock(async () => {
+    let id: string;
+    try {
+      id = await loadTranslatorLocked(from, to, onProgress);
+    } catch {
+      return null;
+    }
+    st.translatorInflight += 1;
+    try {
+      return await fn(id);
+    } catch (err) {
+      console.warn(`▸ QVAC translate ${from}->${to} failed:`, err instanceof Error ? err.message : err);
+      return null;
+    } finally {
+      st.translatorInflight = Math.max(0, st.translatorInflight - 1);
+    }
+  });
 }
 
 export async function translateBatch(
@@ -318,19 +352,32 @@ export async function translateBatch(
   if (texts.length === 0) return { translations: [], stats: null, ms: 0 };
   if (from === to) return { translations: [...texts], stats: null, ms: 0 };
   const t0 = Date.now();
-  onProgress?.(45);
+  // ponytail: one 100-string Bergamot call looks frozen at download-complete (40%) on phone CPU; chunks keep progress moving.
+  const CHUNK = 8;
+  const chunkTimeout = Math.min(timeoutMs, 30000);
   return withTranslatorQueue(from, to, async (id) => {
-    const result = await runTranslate(id, texts, timeoutMs);
-    const translations = (result.translations ?? []).map((item) => (item ?? "").trim());
-    if (translations.length !== texts.length || translations.some((item) => !item)) {
-      throw new Error("translate_batch_mismatch");
+    onProgress?.(50);
+    const translations: string[] = [];
+    let stats: TranslateStats | null = null;
+    for (let i = 0; i < texts.length; i += CHUNK) {
+      const slice = texts.slice(i, i + CHUNK);
+      try {
+        const result = await runTranslate(id, slice, chunkTimeout);
+        const part = (result.translations ?? []).map((item) => (item ?? "").trim());
+        if (part.length !== slice.length) throw new Error("translate_batch_mismatch");
+        for (let j = 0; j < slice.length; j++) translations.push(part[j] || slice[j]);
+        stats = result.stats;
+      } catch (err) {
+        console.warn(`▸ QVAC translate chunk ${i}+${slice.length} failed:`, err instanceof Error ? err.message : err);
+        translations.push(...slice);
+      }
+      onProgress?.(50 + Math.round((50 * translations.length) / texts.length));
     }
     const ms = Date.now() - t0;
     st.lastTranslateMs = ms;
-    st.lastTranslateStats = result.stats;
-    onProgress?.(90);
-    return { translations, stats: result.stats, ms };
-  }, onProgress);
+    st.lastTranslateStats = stats;
+    return { translations, stats, ms };
+  }, (pct) => onProgress?.(Math.round(pct * 0.5)));
 }
 
 export async function translateNote(lang: string, text: string, timeoutMs = 15000): Promise<string | null> {
@@ -367,52 +414,53 @@ export async function releaseUnusedTranslators(keepLang: string): Promise<void> 
 }
 
 export async function inferJson(system: string, user: string, schema: object, timeoutMs = 45000): Promise<{ text: string; inferMs: number }> {
-  const prev = st.tail;
-  let release!: () => void;
-  st.tail = new Promise<void>((r) => { release = r; });
-  await prev;
-  st.inflight += 1;
-
-  const t0 = Date.now();
-  try {
-    const complete = async (id: string) => {
-      const run = completion({
-        modelId: id,
-        history: [
-          { role: "system", content: system },
-          { role: "user", content: user },
-        ],
-        stream: false,
-        responseFormat: { type: "json_schema", json_schema: { name: "observation", schema: schema as Record<string, unknown> } },
-      });
-      try {
-        return await withTimeout(run.final, timeoutMs, "infer_timeout");
-      } catch (err) {
-        // ponytail: race no cancela el worker. Esperar el final nativo antes de la siguiente inferencia.
-        await run.final.catch(() => {});
-        throw err;
-      }
-    };
-
-    let id = await ensureModel();
-    let final;
+  return withNativeLock(async () => {
+    st.inflight += 1;
+    const t0 = Date.now();
     try {
-      final = await complete(id);
-    } catch (error) {
-      if (st.device !== "gpu" || !isMissingModelError(error)) throw error;
-      st.gpuFailed = true;
-      st.modelId = null;
-      st.loading = null;
-      st.device = null;
-      id = await ensureModel();
-      final = await complete(id);
+      const complete = async (id: string) => {
+        const run = completion({
+          modelId: id,
+          history: [
+            { role: "system", content: system },
+            { role: "user", content: user },
+          ],
+          stream: false,
+          responseFormat: { type: "json_schema", json_schema: { name: "observation", schema: schema as Record<string, unknown> } },
+        });
+        try {
+          return await withTimeout(run.final, timeoutMs, "infer_timeout");
+        } catch (err) {
+          // ponytail: race no cancela el worker. Si el JSON llega tarde, úsalo; no lo tires.
+          const late = await run.final.then((v) => v, () => null);
+          if (late?.contentText?.trim()) {
+            console.warn(`▸ QVAC infer recovered after timeout (${Date.now() - t0}ms)`);
+            return late;
+          }
+          console.warn(`▸ QVAC infer_timeout after ${Date.now() - t0}ms`);
+          throw err;
+        }
+      };
+
+      let id = await loadLlmLocked();
+      let final;
+      try {
+        final = await complete(id);
+      } catch (error) {
+        if (st.device !== "gpu" || !isMissingModelError(error)) throw error;
+        st.gpuFailed = true;
+        st.modelId = null;
+        st.loading = null;
+        st.device = null;
+        id = await loadLlmLocked();
+        final = await complete(id);
+      }
+      st.lastInferMs = Date.now() - t0;
+      return { text: final.contentText, inferMs: st.lastInferMs };
+    } finally {
+      st.inflight = Math.max(0, st.inflight - 1);
     }
-    st.lastInferMs = Date.now() - t0;
-    return { text: final.contentText, inferMs: st.lastInferMs };
-  } finally {
-    st.inflight = Math.max(0, st.inflight - 1);
-    release();
-  }
+  });
 }
 
 async function shutdownLlm(): Promise<void> {

@@ -1,10 +1,10 @@
 import { useCallback, useEffect, useState } from "react";
-import * as FileSystem from "expo-file-system";
+import * as FileSystem from "expo-file-system/legacy";
 import {
   getDb, listObservations, saveObservation,
   updateObservation, updateObservationClient, updateEquipment, deleteObservation,
 } from "./db";
-import { ensureModel, ensureTranslator, isReady, isBusy, getLastInferMs, getDevice, setDeviceOverride, MODEL_NAME, releaseUnusedTranslators } from "./qvac";
+import { ensureModel, isReady, isBusy, getLastInferMs, getDevice, setDeviceOverride, MODEL_NAME, releaseUnusedTranslators } from "./qvac";
 import { extractObservation } from "./extraction";
 import { isLang, localizeUi, type Lang } from "../i18n";
 import {
@@ -14,7 +14,7 @@ import {
 import fixtures from "../../fixtures/observations.es.json";
 
 function documentDir(): string {
-  return (FileSystem as unknown as { documentDirectory?: string | null }).documentDirectory ?? "";
+  return FileSystem.documentDirectory ?? "";
 }
 
 export interface OverviewResult {
@@ -119,14 +119,14 @@ export function useStore() {
         setLangState(initial);
         seedIfEmpty();
         if (initial !== "es" && initial !== "en") setUiLocalizing(true);
-        await Promise.all([
-          ensureModel((pct) => setProgress(pct)),
-          ensureTranslator(initial, "en").catch(() => null),
-          localizeUi(initial, (pct) => setUiLocalizeProgress(pct)).catch((err) => {
-            console.warn("ui localize failed:", err);
-          }),
-        ]);
+        // One Bare worker: never overlap GPU llama load with Bergamot loadModel.
+        await ensureModel((pct) => setProgress(pct));
         setProgress(null);
+        try {
+          await localizeUi(initial, (pct) => setUiLocalizeProgress(pct));
+        } catch (err) {
+          console.warn("ui localize failed:", err);
+        }
         setUiLocalizing(false);
         setUiLocalizeProgress(null);
         refresh();
@@ -147,14 +147,15 @@ export function useStore() {
       if (next !== "es" && next !== "en") setUiLocalizing(true);
       try {
         await localizeUi(next, (pct) => setUiLocalizeProgress(pct));
-        await ensureTranslator(next, "en");
-        await releaseUnusedTranslators(next);
       } catch (err) {
         console.warn("setLang localize failed:", err);
       } finally {
         setUiLocalizing(false);
         setUiLocalizeProgress(null);
       }
+      // L→EN loads on first extract; preloading it here stacked Bergamot models
+      // on Android (no unload) and timed out IT→EN while DE was still loading.
+      await releaseUnusedTranslators(next).catch(() => {});
     })();
   }, []);
 

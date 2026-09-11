@@ -32,8 +32,8 @@ export interface ObservationCaptureHandle {
   handleBack: () => boolean;
 }
 
-export const ObservationCapture = forwardRef<ObservationCaptureHandle, { store: Store; onBusyChange?: (busy: boolean) => void }>(
-  function ObservationCapture({ store, onBusyChange }, ref) {
+export const ObservationCapture = forwardRef<ObservationCaptureHandle, { store: Store; onBusyChange?: (busy: boolean) => void; tabBarHeight?: number }>(
+  function ObservationCapture({ store, onBusyChange, tabBarHeight = 0 }, ref) {
   const { theme } = useTheme();
   const { t, lang } = useI18n();
   const styles = makeStyles(theme);
@@ -75,16 +75,11 @@ export const ObservationCapture = forwardRef<ObservationCaptureHandle, { store: 
   }, [t, lang]);
 
   useEffect(() => {
-    // KeyboardAvoidingView shrinks itself by comparing its own bottom edge to the
-    // keyboard's top — but the tab bar below this screen (a sibling in App.tsx,
-    // outside this component) isn't part of that math, so the shrink comes up
-    // short by roughly the tab bar's height and the composer stays partly under
-    // the keyboard. Measuring the keyboard height directly and padding the
-    // composer with it sidesteps that miscalculation entirely on Android (iOS's
-    // "padding" behavior already accounts for this correctly on its own).
+    // adjustResize already lifts the tab bar. Padding the composer by the full
+    // keyboard height double-counts that bar; subtract the measured height.
     if (Platform.OS !== "android") return;
     const showSub = Keyboard.addListener("keyboardDidShow", (e) => {
-      setAndroidKeyboardHeight(e.endCoordinates.height);
+      setAndroidKeyboardHeight(Math.max(0, e.endCoordinates.height - tabBarHeight));
       scrollRef.current?.scrollToEnd({ animated: true });
     });
     const hideSub = Keyboard.addListener("keyboardDidHide", () => setAndroidKeyboardHeight(0));
@@ -92,7 +87,7 @@ export const ObservationCapture = forwardRef<ObservationCaptureHandle, { store: 
       showSub.remove();
       hideSub.remove();
     };
-  }, []);
+  }, [tabBarHeight]);
 
   useEffect(() => {
     if (!loading) {

@@ -301,7 +301,7 @@ export function toEnglishObservation(text: string): string {
 }
 
 const MODALITY_KEYWORDS: [RegExp, Modality][] = [
-  [/resonador(es)?|\bmri\b|\bmagnetic\s+resonance\b/i, "resonador"],
+  [/resonador(es)?|\bmri\b|\bmrt\b|\bmagnetic\s+resonance\b/i, "resonador"],
   [/tom[oó]grafo(s)?|\bct(?:\s*scanner)?\b|\bcomputed\s+tomograph/i, "tomografo"],
   [/ec[oó]grafo(s)?|\bultrasound\b|\bsonograph/i, "ecografo"],
   [/rayos?\s*x|\bx[-\s]?ray/i, "rayos-x"],
@@ -309,7 +309,7 @@ const MODALITY_KEYWORDS: [RegExp, Modality][] = [
 ];
 
 const MODALITY_ALIASES: Record<string, Modality> = {
-  resonador: "resonador", resonadores: "resonador", mri: "resonador", "magnetic-resonance": "resonador",
+  resonador: "resonador", resonadores: "resonador", mri: "resonador", mrt: "resonador", "magnetic-resonance": "resonador",
   tomografo: "tomografo", tomografos: "tomografo", ct: "tomografo", "ct-scanner": "tomografo", ctscanner: "tomografo",
   "computed-tomography": "tomografo",
   ecografo: "ecografo", ecografos: "ecografo", ultrasound: "ecografo", sonograph: "ecografo",
@@ -319,9 +319,22 @@ const MODALITY_ALIASES: Record<string, Modality> = {
   otra: "otra", other: "otra",
 };
 
-const UNITS: Record<string, number> = { un: 1, uno: 1, una: 1, dos: 2, tres: 3, cuatro: 4, cinco: 5, seis: 6, siete: 7, ocho: 8, nueve: 9 };
-const TEENS: Record<string, number> = { diez: 10, once: 11, doce: 12, trece: 13, catorce: 14, quince: 15, dieciseis: 16, diecisiete: 17, dieciocho: 18, diecinueve: 19 };
-const TENS: Record<string, number> = { veinte: 20, treinta: 30, cuarenta: 40, cincuenta: 50, sesenta: 60, setenta: 70, ochenta: 80, noventa: 90 };
+const UNITS: Record<string, number> = {
+  un: 1, uno: 1, una: 1, one: 1,
+  dos: 2, two: 2, tres: 3, three: 3, cuatro: 4, four: 4, cinco: 5, five: 5,
+  seis: 6, six: 6, siete: 7, seven: 7, ocho: 8, eight: 8, nueve: 9, nine: 9,
+};
+const TEENS: Record<string, number> = {
+  diez: 10, ten: 10, once: 11, eleven: 11, doce: 12, twelve: 12, trece: 13, thirteen: 13,
+  catorce: 14, fourteen: 14, quince: 15, fifteen: 15,
+  dieciseis: 16, sixteen: 16, diecisiete: 17, seventeen: 17, dieciocho: 18, eighteen: 18,
+  diecinueve: 19, nineteen: 19,
+};
+const TENS: Record<string, number> = {
+  veinte: 20, twenty: 20, treinta: 30, thirty: 30, cuarenta: 40, forty: 40,
+  cincuenta: 50, fifty: 50, sesenta: 60, sixty: 60, setenta: 70, seventy: 70,
+  ochenta: 80, eighty: 80, noventa: 90, ninety: 90,
+};
 const HUNDREDS: Record<string, number> = {
   cien: 100, ciento: 100,
   doscientos: 200, doscientas: 200, trescientos: 300, trescientas: 300,
@@ -354,35 +367,47 @@ function parseNum(token: string): number | null {
   return n > 0 ? n : null;
 }
 
-const FACILITY_RE =
-  /^(hospital|cl[ií]nica|clinic|centro m[eé]dico|policl[ií]nica|polyclinic|sanatorio|centro)\s+(.+)$/i;
+const FACILITY_KIND = String.raw`hospital|cl[ií]nica|clinic|centro m[eé]dico|policl[ií]nica|polyclinic|sanatorio|centro|klinik`;
+const FACILITY_RE = new RegExp(`^(${FACILITY_KIND})\\s+(.+)$`, "i");
+const FACILITY_RE_SUFFIX = /^(.*?)\s+(hospital|cl[ií]nica|clinic|klinik)$/i;
 const ARTICLES = new Set(["de", "del", "la", "el", "los", "las", "of", "the"]);
+const LOCATIVES = new Set(["in", "en", "at", "im", "am", "auf", "a"]);
 
 function stripAccents(s: string): string {
   return s.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+}
+
+function parseFacilityName(name: string): { kind: string; rest: string } | null {
+  const prefix = name.match(FACILITY_RE);
+  if (prefix?.[1] && prefix?.[2]) return { kind: prefix[1], rest: prefix[2].trim() };
+  const suffix = name.match(FACILITY_RE_SUFFIX);
+  if (suffix?.[1] && suffix?.[2]) return { kind: suffix[2], rest: suffix[1].trim() };
+  return null;
 }
 
 function acceptClient(raw: string | null, sourceText?: string): string | null {
   if (!raw) return null;
   const name = raw.split(",")[0].trim();
   if (name.length === 0 || name.length > 60) return null;
-  const m = name.match(FACILITY_RE);
-  if (!m?.[2]) return null;
-  const words = m[2].trim().split(/\s+/);
+  const parsed = parseFacilityName(name);
+  if (!parsed) return null;
+  const words = parsed.rest.split(/\s+/);
   const isArticle = (w: string) => ARTICLES.has(stripAccents(w));
   const content = words.filter((w) => !isArticle(w));
   if (content.length === 0) return null;
+  if (LOCATIVES.has(stripAccents(content[0]))) return null;
   // "policlínica de David" = ciudad. "Hospital de Paitilla" / "del Istmo" = nombre.
   const link = stripAccents(words[0]);
-  const kind = stripAccents(m[1]);
+  const kind = stripAccents(parsed.kind);
   if ((link === "de" || link === "of") && words.length === 2 && !isArticle(words[1])) {
     if (kind.startsWith("policl") || kind === "polyclinic") return null;
   }
   if (content[0][0] !== content[0][0].toUpperCase()) return null;
   if (sourceText) {
+    if (literalIn(sourceText, name)) return name;
     const cleanSource = ` ${stripAccents(sourceText).replace(/[^a-z0-9]/g, " ")} `;
     const core = content.map((w) => stripAccents(w));
-    if (core.length > 0 && !core.some((w) => cleanSource.includes(` ${w} `))) return null;
+    if (core.length < 2 || core.some((w) => !cleanSource.includes(` ${w} `))) return null;
   }
   return name;
 }
@@ -430,28 +455,45 @@ function nearestModalityAt(low: string, pos: number): Modality | null {
 
 function rescueClient(sourceText: string): string | null {
   const clean = sourceText.replace(/[\[\]{}()]/g, "");
-  const m = clean.match(
-    /(hospital|cl[ií]nica|clinic|centro m[eé]dico|policl[ií]nica|sanatorio|centro)\s+([^,.;]+?)(?:,|\.| en | hay |$)/i,
+  const loc = String.raw`en|in|im|at`;
+  const prefix = clean.match(
+    new RegExp(`(${FACILITY_KIND})\\s+(?!(?:${loc})\\b)([^,.;]+?)(?:,|\\. | (?:${loc}) | hay |$)`, "i"),
   );
-  if (!m?.[1] || !m?.[2]) return null;
-  const rawName = `${m[1]} ${m[2].trim()}`
-    .split(/\s+/)
-    .map((w) => (ARTICLES.has(w.toLowerCase()) ? w.toLowerCase() : w.charAt(0).toUpperCase() + w.slice(1)))
-    .join(" ");
-  return acceptClient(rawName, sourceText);
+  if (prefix?.[1] && prefix?.[2]) {
+    const rawName = `${prefix[1]} ${prefix[2].trim()}`
+      .split(/\s+/)
+      .map((w) => (ARTICLES.has(w.toLowerCase()) ? w.toLowerCase() : w.charAt(0).toUpperCase() + w.slice(1)))
+      .join(" ");
+    const ok = acceptClient(rawName, sourceText);
+    if (ok) return ok;
+  }
+  const suffix = clean.match(
+    new RegExp(String.raw`\b((?:[A-ZÁÉÍÓÚÜÑ][\p{L}\d'-]+\s+){1,6})(hospital|clinic|klinik)\b(?=\s+(?:${loc})\b|,|\.|$)`, "iu"),
+  );
+  if (suffix?.[1] && suffix?.[2]) {
+    return acceptClient(`${suffix[1].trim()} ${suffix[2]}`, sourceText);
+  }
+  return null;
 }
 
 // Frontera ASCII, no \b: si no, "treinta y cinco mamógrafos" casa solo "cinco".
 const NUMBER_WORD = String.raw`(?<![a-z0-9])${NUMBER_TOKEN}(?![a-z0-9])`;
+
+const QTY_LEAD = String.raw`(?:${NUMBER_WORD}|(?<![a-z0-9])(?:a|an)(?![a-z0-9]))`;
+
+function qtyFromMatch(m: RegExpMatchArray | null): number | null {
+  if (!m) return null;
+  if (m[1]) return parseNum(m[1]);
+  return /^(?:a|an)\b/i.test(m[0].trim()) ? 1 : null;
+}
 
 function rescueQuantity(modality: Modality | null, anchor: string): number | null {
   const low = anchor.toLowerCase();
   if (modality) {
     const kw = MODALITY_KEYWORDS.find(([, m]) => m === modality)?.[0].source;
     if (kw) {
-      const filler = String.raw`(?:equipos?|sistemas?|unidades?)\s+(?:de\s+)?`;
-      const m = low.match(new RegExp(`${NUMBER_WORD}\\s*(?:${filler})?(?:de\\s+)?(?:${kw})`, "i"));
-      const n = m?.[1] ? parseNum(m[1]) : null;
+      const filler = String.raw`(?:equipos?|sistemas?|unidades?|devices?|scanners?|units?|machines?)\s+(?:de\s+|of\s+)?`;
+      const n = qtyFromMatch(low.match(new RegExp(`${QTY_LEAD}\\s*(?:${filler})?(?:de\\s+|of\\s+)?(?:${kw})`, "i")));
       if (n && n > 0) return n;
     }
   }
@@ -459,10 +501,9 @@ function rescueQuantity(modality: Modality | null, anchor: string): number | nul
     const hasOtherMod = MODALITY_KEYWORDS.some(([re, m]) => m !== modality && re.test(low));
     if (hasOtherMod) return null;
   }
-  const generic = low.match(new RegExp(`${NUMBER_WORD}(?!\\s*(?:salas?|piso|pabell[oó]n|anexo|a[nñ]os))`, "i"))?.[1];
-  const n = generic ? parseNum(generic) : null;
-  if (!n || n <= 0 || n >= 1900) return null;
-  return n;
+  const generic = qtyFromMatch(low.match(new RegExp(`${QTY_LEAD}(?!\\s*(?:salas?|piso|pabell[oó]n|anexo|a[nñ]os|years?))`, "i")));
+  if (!generic || generic <= 0 || generic >= 1900) return null;
+  return generic;
 }
 
 function rescueFollowQuantity(modality: Modality | null, follow: string): number | null {
@@ -477,14 +518,15 @@ function rescueFollowQuantity(modality: Modality | null, follow: string): number
 function rescueAge(anchor: string, nowYear = new Date().getFullYear()): number | null {
   const low = anchor.toLowerCase();
   const rangeNorm = low.normalize("NFD").replace(/[\u0300-\u036f]/g, "");
-  const ageToken = String.raw`(\d{1,2}|uno|dos|tres|cuatro|cinco|seis|siete|ocho|nueve|diez|once|doce|quince|veinte)`;
-  const range = rangeNorm.match(new RegExp(`${ageToken}\\s*(?:–|—|-|a)\\s*(\\d{1,2})\\s*anos`));
+  const ageToken = String.raw`(\d{1,2}|uno|dos|tres|cuatro|cinco|seis|siete|ocho|nueve|diez|once|doce|quince|veinte|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|fifteen|twenty)`;
+  const yearWord = String.raw`(?:anos?|years?|jahre?n?)`;
+  const range = rangeNorm.match(new RegExp(`${ageToken}\\s*(?:–|—|-|a|to)\\s*(\\d{1,2})\\s*${yearWord}`));
   if (range?.[1] && range?.[2]) {
     const a = parseNum(range[1]);
     if (a !== null) return Math.round((a + Number(range[2])) / 2);
   }
   const single = rangeNorm.match(
-    new RegExp(`(?:de\\s+)?(?:unos|unas|mas de|alrededor de)\\s*${ageToken}\\s*anos|${ageToken}\\s*anos`),
+    new RegExp(`(?:de\\s+)?(?:unos|unas|mas de|alrededor de|about|around)\\s*${ageToken}\\s*${yearWord}(?:\\s+old)?|${ageToken}\\s*${yearWord}(?:\\s+old)?`),
   );
   if (single) {
     const token = single[1] ?? single[2];
@@ -498,14 +540,16 @@ function rescueAge(anchor: string, nowYear = new Date().getFullYear()): number |
     const age = nowYear - Number(install);
     if (age >= 0 && age <= 60) return age;
   }
-  if (/\bnuev[oa]s?\b/.test(low)) return 0;
+  if (/\bnuev[oa]s?\b|\bnew\b/.test(low)) return 0;
   return null;
 }
 
-const FACILITY_HEAD = /^(hospital|cl[ií]nica|clinic|sanatorio|centro|policl)/i;
-const PLACE_STOP = /^(hay|vi|tiene|tienen|tenían|un|una|dos|tres|con|y)$/i;
-const FACILITY_SPAN =
-  /(?:hospital|cl[ií]nica|clinic|sanatorio|centro m[eé]dico|policl[ií]nica|centro)\s+[^,.;]+?(?=\s+en\s+|,|\.|:|$)/i;
+const FACILITY_HEAD = /^(hospital|cl[ií]nica|clinic|sanatorio|centro|policl|klinik)/i;
+const PLACE_STOP = /^(hay|vi|tiene|tienen|tenían|un|una|dos|tres|con|y|saw|and)$/i;
+const FACILITY_SPAN = new RegExp(
+  String.raw`(?:(?:${FACILITY_KIND})\s+(?!(?:en|in|im|at)\b)[^,.;]+?|(?:[A-ZÁÉÍÓÚÜÑ][\p{L}\d'-]+\s+){1,5}(?:hospital|clinic|klinik))(?=\s+(?:en|in|im|at)\s+|,|\.|:|$)`,
+  "iu",
+);
 const PLACE_TAIL = String.raw`[A-ZÁÉÍÓÚÜÑ][\p{L}'.]*(?:\s+(?:del|de|la|el|los|las|of|the|[A-ZÁÉÍÓÚÜÑ][\p{L}'.]*)){0,4}`;
 
 function fold(s: string): string {
@@ -582,7 +626,7 @@ function acceptGeo(raw: string | null, source: string): string | null {
 }
 
 function placeAfter(prefix: string): string | null {
-  const t = prefix.trim().replace(/^en\s+/i, "").trim();
+  const t = prefix.trim().replace(/^(?:en|in|im|at)\s+/i, "").trim();
   return isPlacePhrase(t) ? titlePlace(t) : null;
 }
 
@@ -599,7 +643,8 @@ function geoAfterFacility(source: string): { after: string; places: string[] } {
 function rescueGeoSlots(source: string): { city: string | null; country: string | null } {
   const { after, places } = geoAfterFacility(source);
   if (places.length >= 2) return { city: places[places.length - 2], country: places[places.length - 1] };
-  if (places.length === 1 && /^,\s*en\s+/i.test(after)) return { city: null, country: places[0] };
+  if (places.length === 1 && /^\s*,\s*(?:en|in|im|at)\s+/i.test(after)) return { city: null, country: places[0] };
+  if (places.length === 1 && /^\s*(?:en|in|im|at)\s+/i.test(after)) return { city: places[0], country: null };
   const de = source.match(new RegExp(
     String.raw`(?:policl[ií]nica|cl[ií]nica)\s+de\s+(${PLACE_TAIL})\s*,\s*([A-ZÁÉÍÓÚÜÑ][^,.;]*)`,
     "iu",
@@ -609,7 +654,7 @@ function rescueGeoSlots(source: string): { city: string | null; country: string 
     if (country) return { city: titlePlace(de[1]), country };
   }
   const facEn = source.match(new RegExp(
-    String.raw`(?:hospital|cl[ií]nica|clinic|sanatorio|centro m[eé]dico|policl[ií]nica|centro)\s+(?!en\b)[^,.;]*?\s+en\s+(${PLACE_TAIL})`,
+    String.raw`(?:hospital|cl[ií]nica|clinic|sanatorio|centro m[eé]dico|policl[ií]nica|centro)\s+(?!(?:en|in|im|at)\b)[^,.;]*?\s+(?:en|in|im|at)\s+(${PLACE_TAIL})`,
     "iu",
   ));
   const name = (facEn?.[1] ?? "").replace(/[,.:;].*$/, "").trim();
@@ -638,8 +683,8 @@ function groundGeo(draft: ObservationDraft, sourceText: string): { city: string 
 function ageMentionPos(sourceText: string, ageYears: number): number | null {
   const low2 = sourceText.toLowerCase();
   const norm = low2.normalize("NFD").replace(/[\u0300-\u036f]/g, "");
-  const wordForm = Object.entries(ATOMS).find(([, n]) => n === ageYears)?.[0];
-  const ageM = norm.match(new RegExp(`(?:${ageYears}|${wordForm ?? ""})\\s+anos?`));
+  const wordAlt = Object.entries(ATOMS).filter(([, n]) => n === ageYears).map(([w]) => w).join("|");
+  const ageM = norm.match(new RegExp(`(?:${ageYears}|${wordAlt})\\s+(?:anos?|years?|jahre?n?)`));
   const year = new Date().getFullYear() - ageYears;
   const yearM = low2.match(new RegExp(`\\b${year}\\b`));
   const newM = ageYears === 0 ? low2.match(/\bnuev[oa]s?\b/) : null;

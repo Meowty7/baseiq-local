@@ -1,4 +1,4 @@
-import * as FileSystem from "expo-file-system";
+import * as FileSystem from "expo-file-system/legacy";
 import { openDatabaseSync, type SQLiteDatabase } from "expo-sqlite";
 import type { ObservationRecord, ObservationStatus } from "../../shared/observation";
 

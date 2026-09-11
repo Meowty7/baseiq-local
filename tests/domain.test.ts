@@ -444,6 +444,27 @@ describe("review fixes", () => {
     expect(poli.client).toBeNull();
   });
 
+  test("grounding EN post-NMT: Hospital al final, two/eight years, no Hospital Panama", () => {
+    const en = "I am at DemoCare Pacific Hospital in Panama. I saw two MRI devices and a CT scanner. One of the MRI devices looks about eight years old.";
+    const de = "Ich bin im DemoCare Pacific Hospital in Panama. Ich habe zwei MRT-Geräte und einen CT-Scanner gesehen. Eines der MRT-Geräte sieht etwa acht Jahre alt aus.";
+    const d = groundDraft(normalizeDraft({
+      client: "Hospital Panama", city: null, country: "Panama",
+      equipment: [
+        { modality: "MRI", quantity: null, brand: null, model: null, ageYears: null, evidence: "MRI" },
+        { modality: "CT", quantity: null, brand: null, model: null, ageYears: null, evidence: "CT" },
+      ],
+      missing: [],
+    }), `${de}\n${en}`, en);
+    expect(d.client).toMatch(/DemoCare Pacific Hospital/i);
+    expect(d.client).not.toMatch(/hospital panama/i);
+    const mri = d.equipment.find((e) => e.modality === "resonador");
+    const ct = d.equipment.find((e) => e.modality === "tomografo");
+    expect(mri?.quantity).toBe(2);
+    expect(mri?.ageYears).toBe(8);
+    expect(ct?.quantity).toBe(1);
+    expect(ct?.ageYears).toBeNull();
+  });
+
   test("sin equipos no deja un CT del few-shot", () => {
     const d = groundDraft(normalizeDraft(hostileDraft),
       "Estuve en Hospital Nube Gris, Cartagena, Colombia. No vi equipos de imagen, solo la sala de espera.");

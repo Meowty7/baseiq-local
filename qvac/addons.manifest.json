@@ -1,8 +1,9 @@
 {
   "version": 1,
-  "bundleId": "ade12c78bfb746cc4b7932085cf326bbcd6b07ab2d3f8e0165aba499ac270cce",
+  "bundleId": "f641140d687bb3f8ecc3327dc9b108c9a24198ca47c15998176ae9bab7b7e0ec",
   "addons": [
     "@qvac/llm-llamacpp",
+    "@qvac/translation-nmtcpp",
     "bare-buffer",
     "bare-cpu-info",
     "bare-crypto",

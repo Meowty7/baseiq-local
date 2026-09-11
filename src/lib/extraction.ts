@@ -40,7 +40,8 @@ export async function extractObservation(
 ): Promise<{ draft: ObservationDraft; question: string | null; inferMs: number; english: string; translateVia: TranslateVia }> {
   let lastError: unknown = null;
   const { english, via } = await resolveObservationEnglish(text, lang);
-  const sourceForGrounding = lang === "es" ? text : english;
+  // Blindar contra original + inglés: nombres propios vienen de L, cantidades/edad del NMT.
+  const sourceForGrounding = lang === "es" ? text : (english === text ? text : `${text}\n${english}`);
   for (let attempt = 0; attempt < 2; attempt++) {
     try {
       const { text: raw, inferMs } = await inferJson(SYSTEM, english, EXTRACTION_SCHEMA);
