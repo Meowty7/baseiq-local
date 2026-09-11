@@ -2,7 +2,7 @@
 
 Prototipo Philips (Track 01) + Reto Tether: QVAC Psy (Track 02) + Desafío General — Decentralized AI Hackathon (Dojo / ISD Summit).
 
-Un colaborador de campo elige su idioma, escribe o dicta lo que vio en un hospital (o fotografía una placa), y la app traduce y extrae el inventario con IA **en el dispositivo**. El usuario revisa y confirma; los datos se agregan por cliente y geografía. Sin internet, sin nube.
+Un colaborador de campo elige su idioma, escribe o dicta lo que vio en un hospital, y la app traduce y extrae el inventario con IA **en el dispositivo**. El usuario revisa y confirma; los datos se agregan por cliente y geografía. Sin internet, sin nube.
 
 **Demo:** https://qvac.belta.dev/demo/
 
@@ -14,7 +14,7 @@ UI, preguntas de seguimiento y captura van en el idioma L. El prompt de extracci
 
 ## Flujo
 
-Nota (L) o voz / foto → TranslatePsy L→EN → extracción local (prompt EN, `json_schema`) → pregunta por el faltante en L → revisión con evidencia → SQLite por cliente + resumen (renovación ≥ 7 años, duplicados, conflictos, frescura).
+Nota (L) o voz → TranslatePsy L→EN → extracción local (prompt EN, `json_schema`) → pregunta por el faltante en L → revisión con evidencia → SQLite por cliente + resumen (renovación ≥ 7 años, duplicados, conflictos, frescura).
 
 Cada observación guarda autor, fecha, fuente, estado, texto original y evidencia.
 
@@ -26,13 +26,12 @@ Expo / React Native
       llamacpp-completion     → QWEN3_600M_INST_Q4 (GPU, CPU si falla)
       nmtcpp-translation      → BERGAMOT_{L}_EN / BERGAMOT_EN_{L}
       whispercpp-transcription → dictado ES
-      Qwen3.5 VL              → foto de placa (CPU)
   → expo-sqlite
   → src/i18n
 ```
 
 - `App.tsx`, `src/components/` — captura, base, insights, idioma.
-- `src/lib/qvac.ts` — LLM, NMT, Whisper, visión.
+- `src/lib/qvac.ts` — LLM, NMT, Whisper.
 - `src/lib/extraction.ts` — traducción + schema + `groundDraft()`.
 - `src/lib/db.ts`, `store.ts` — SQLite local.
 - `shared/observation.ts` — contrato y reglas anti-alucinación.
@@ -41,7 +40,7 @@ Modelo por defecto: Qwen3 0.6B Q4 (`QVAC_MODEL` para override). Inferencia solo 
 
 ## GPU
 
-El LLM arranca en GPU (`gpu_layers: 99`) y cae a CPU si falla. NMT y visión van en CPU. En Android el worker no se descarga (QVAC-19304).
+El LLM arranca en GPU (`gpu_layers: 99`) y cae a CPU si falla. NMT va en CPU. En Android el worker no se descarga (QVAC-19304).
 
 | Dispositivo | mean | p50 | p95 |
 |---|---|---|---|
