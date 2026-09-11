@@ -11,7 +11,7 @@ import { ThemeProvider, font, useTheme, type Theme } from "./src/ui/theme";
 type Tab = "capture" | "records" | "insights";
 
 const TABS: { key: Tab; icon: string; label: string; title: string }[] = [
-  { key: "capture", icon: "＋", label: "Captura", title: "Nueva observación" },
+  { key: "capture", icon: "＋", label: "Captura", title: "" },
   { key: "records", icon: "☰", label: "Registros", title: "Registros" },
   { key: "insights", icon: "◈", label: "Insights", title: "Insights" },
 ];
@@ -52,7 +52,7 @@ function AppShell() {
       <StatusBar barStyle={theme.mode === "dark" ? "light-content" : "dark-content"} backgroundColor={theme.color.surface} />
 
       <View style={styles.header}>
-        <Text style={theme.type.title}>{current.title}</Text>
+        {current.title ? <Text style={theme.type.title}>{current.title}</Text> : null}
         <View style={styles.aiStatus}>
           <View style={[styles.dot, { backgroundColor: captureBusy ? theme.color.warn : store.status.ready ? theme.color.ok : theme.color.textTertiary }]} />
           <Text style={theme.type.caption}>{aiLabel}</Text>

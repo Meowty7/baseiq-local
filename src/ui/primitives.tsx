@@ -70,6 +70,45 @@ export function Row({
   );
 }
 
+/**
+ * Barra horizontal proporcional: etiqueta, pista con relleno de color según
+ * `tone`, y valor a la derecha en tinta neutra (el color nunca lleva el texto).
+ * Pressable opcional para llevar a detalle (ej. filtrar por ese segmento).
+ */
+export function BarRow({
+  label,
+  fraction,
+  valueLabel,
+  tone,
+  onPress,
+}: {
+  label: string;
+  fraction: number;
+  valueLabel: string;
+  tone: string;
+  onPress?: () => void;
+}) {
+  const { theme } = useTheme();
+  const styles = makeStyles(theme);
+  const pct = Math.max(0, Math.min(1, fraction));
+  return (
+    <Pressable
+      onPress={onPress}
+      disabled={!onPress}
+      accessibilityRole={onPress ? "button" : "text"}
+      style={({ pressed }) => [styles.barRow, pressed && onPress && styles.pressed]}
+    >
+      <View style={styles.barRowHead}>
+        <Text style={theme.type.secondary} numberOfLines={1}>{label}</Text>
+        <Text style={theme.type.bodyMedium}>{valueLabel}</Text>
+      </View>
+      <View style={styles.barTrack}>
+        <View style={[styles.barFill, { width: `${pct * 100}%`, backgroundColor: tone }]} />
+      </View>
+    </Pressable>
+  );
+}
+
 /** Estado como texto + punto de color; sin fondos de colores. */
 export function StatusText({ label, tone }: { label: string; tone: string }) {
   const { theme } = useTheme();
@@ -196,6 +235,10 @@ function makeStyles(theme: Theme) {
     pressed: { opacity: 0.6 },
     status: { flexDirection: "row", alignItems: "center", gap: 6 },
     dot: { width: 7, height: 7, borderRadius: 4 },
+    barRow: { paddingHorizontal: space.lg, paddingVertical: space.sm, gap: 6 },
+    barRowHead: { flexDirection: "row", justifyContent: "space-between", alignItems: "baseline", gap: space.sm },
+    barTrack: { height: 8, borderRadius: 4, backgroundColor: color.surfaceMuted, overflow: "hidden" },
+    barFill: { height: "100%", borderRadius: 4 },
     btn: { minHeight: 46, borderRadius: radius.md, alignItems: "center", justifyContent: "center", paddingHorizontal: space.lg, backgroundColor: color.primary },
     btnSecondary: { backgroundColor: color.surface, borderWidth: 1, borderColor: color.border },
     btnDisabled: { opacity: 0.4 },

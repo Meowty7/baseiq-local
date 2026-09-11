@@ -27,7 +27,7 @@ export function InsightsTab({ overview, observations, onViewClient }: {
       </View>
 
       {mode === "global" ? (
-        <OverviewDashboard overview={overview} observations={observations} />
+        <OverviewDashboard overview={overview} observations={observations} onViewClient={onViewClient} />
       ) : (
         <ClientInstalledBase observations={observations} onViewClient={onViewClient} />
       )}
