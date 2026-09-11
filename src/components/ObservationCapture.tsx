@@ -6,8 +6,27 @@ import { type useStore, OBSERVATION_STATUSES, SOURCE_TYPES } from "../lib/store"
 import { Button, Card, Input, Select } from "../ui/primitives";
 import { radius, space, useTheme, type Theme } from "../ui/theme";
 import { modalityLabels, statusLabels, useI18n } from "../i18n";
-import { useAudioRecorder, RecordingPresets, requestRecordingPermissionsAsync, setAudioModeAsync } from "expo-audio";
 import * as ImagePicker from "expo-image-picker";
+
+// Lazy: expo-audio native module may not be compiled into the dev client yet.
+// Importing at top level crashes the app on launch if the .so is missing.
+let useAudioRecorder: (opts: unknown, cb?: (s: unknown) => void) => { uri: string | null; record: (o?: unknown) => void; stop: () => Promise<void>; prepareToRecordAsync: () => Promise<void> } | null = null;
+let requestRecordingPermissionsAsync: (() => Promise<{ granted: boolean }>) | null = null;
+let setAudioModeAsync: ((m: unknown) => Promise<void>) | null = null;
+let RecordingPresets: { HIGH_QUALITY: unknown } | null = null;
+let audioImportFailed = false;
+async function ensureAudio() {
+  if (useAudioRecorder || audioImportFailed) return;
+  try {
+    const mod = await import("expo-audio");
+    useAudioRecorder = mod.useAudioRecorder;
+    requestRecordingPermissionsAsync = mod.requestRecordingPermissionsAsync;
+    setAudioModeAsync = mod.setAudioModeAsync;
+    RecordingPresets = mod.RecordingPresets;
+  } catch {
+    audioImportFailed = true;
+  }
+}
 
 type Store = ReturnType<typeof useStore>;
 
@@ -65,7 +84,7 @@ export const ObservationCapture = forwardRef<ObservationCaptureHandle, { store: 
   const scrollRef = useRef<ScrollView>(null);
   const [elapsedSec, setElapsedSec] = useState(0);
   const [androidKeyboardHeight, setAndroidKeyboardHeight] = useState(0);
-  const recorder = useAudioRecorder(RecordingPresets.HIGH_QUALITY);
+  const recorderRef = useRef<{ uri: string | null; record: (o?: unknown) => void; stop: () => Promise<void>; prepareToRecordAsync: () => Promise<void> } | null>(null);
 
   useEffect(() => {
     onBusyChange?.(loading || saving || transcribing || analyzingImage);
@@ -154,20 +173,25 @@ export const ObservationCapture = forwardRef<ObservationCaptureHandle, { store: 
 
   async function toggleMic() {
     if (transcribing || analyzingImage) return;
-    if (recording) {
-      await recorder.stop();
+    if (recording && recorderRef.current) {
+      await recorderRef.current.stop();
       setRecording(false);
-      const uri = recorder.uri;
+      const uri = recorderRef.current.uri;
       if (!uri) return;
       setTranscribing(true);
       try {
         const transcript = await store.transcribe(uri);
         if (transcript.trim()) setText((prev) => (prev.trim() ? `${prev} ` : "") + transcript.trim());
-      } catch (e) {
+      } catch {
         setError(t("capture.micError"));
       } finally {
         setTranscribing(false);
       }
+      return;
+    }
+    await ensureAudio();
+    if (!useAudioRecorder || !requestRecordingPermissionsAsync || !setAudioModeAsync || !RecordingPresets) {
+      setError(t("capture.micError"));
       return;
     }
     const perm = await requestRecordingPermissionsAsync();
@@ -176,8 +200,10 @@ export const ObservationCapture = forwardRef<ObservationCaptureHandle, { store: 
       return;
     }
     await setAudioModeAsync({ playsInSilentMode: true } as Record<string, unknown>);
-    await recorder.prepareToRecordAsync();
-    recorder.record();
+    recorderRef.current = useAudioRecorder(RecordingPresets.HIGH_QUALITY, () => {});
+    if (!recorderRef.current) return;
+    await recorderRef.current.prepareToRecordAsync();
+    recorderRef.current.record();
     setRecording(true);
   }
 
