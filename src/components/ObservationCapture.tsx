@@ -158,6 +158,29 @@ export const ObservationCapture = forwardRef<ObservationCaptureHandle, { store: 
     return getQuestion(q.field, lang, equipmentNumber);
   }
 
+  /**
+   * Plain-text recap shown once, as a chat message, after the last review
+   * question — this is the only "look at everything together" moment during
+   * review; there's no form/card visible while questions are being asked.
+   */
+  function buildSummaryText(d: ObservationDraft, meta: { submittedBy: string; observedAt: string; sourceType: string }): string {
+    const empty = t("capture.summaryEmpty");
+    const lines = [
+      t("capture.summaryClient", { value: d.client || empty }),
+      t("capture.summaryLocation", { value: [d.city, d.country].filter(Boolean).join(", ") || empty }),
+      ...d.equipment.map((eq, i) => {
+        const modalityLabel = eq.modality ? labels[eq.modality] ?? eq.modality : t("modality.equipo");
+        const qty = eq.quantity != null ? t("capture.summaryUnits", { n: eq.quantity }) + " " : "";
+        const parts = [`${qty}${modalityLabel}`, eq.brand, eq.model, eq.ageYears != null ? `${eq.ageYears}a` : null].filter(Boolean);
+        return t("capture.summaryEquipment", { n: i + 1, value: parts.join(" · ") || empty });
+      }),
+      t("capture.summarySubmittedBy", { value: meta.submittedBy.trim() || empty }),
+      t("capture.summaryObservedAt", { value: meta.observedAt.trim() || empty }),
+      t("capture.summarySource", { value: meta.sourceType ? sourceLabels[meta.sourceType] ?? meta.sourceType : empty }),
+    ];
+    return lines.join("\n");
+  }
+
   const currentMeta = { submittedBy, observedAt, sourceType };
   const reviewQuestion = reviewing ? getReviewQuestion(draft, skippedFields, currentMeta) : null;
   const awaitingAnswer = !!reviewQuestion;
@@ -269,6 +292,17 @@ export const ObservationCapture = forwardRef<ObservationCaptureHandle, { store: 
     return { ok: false, error: "unknown_field" };
   }
 
+  /** Pushes the next question, or wraps up review with the "done" message plus the one-time plain-text summary, once nothing's left to ask. */
+  function askNextOrFinish(d: ObservationDraft | null, skip: ReadonlySet<string>, meta: { submittedBy: string; observedAt: string; sourceType: string }) {
+    const next = getReviewQuestion(d, skip, meta);
+    if (next) {
+      push(msg("assistant", questionTextFor(next, d)));
+      return;
+    }
+    push(msg("assistant", t("capture.reviewDone")));
+    if (d) push(msg("assistant", buildSummaryText(d, meta)));
+  }
+
   function answerFollowUp() {
     if (!reviewQuestion || text.trim().length < 1 || loading) return;
     const answer = text.trim();
@@ -280,8 +314,7 @@ export const ObservationCapture = forwardRef<ObservationCaptureHandle, { store: 
       push(msg("assistant", questionTextFor(reviewQuestion, draft)));
       return;
     }
-    const next = getReviewQuestion(applied.draft, skippedFields, applied.meta);
-    push(msg("assistant", next ? questionTextFor(next, applied.draft) : t("capture.reviewDone")));
+    askNextOrFinish(applied.draft, skippedFields, applied.meta);
   }
 
   function skipReviewQuestion() {
@@ -289,8 +322,7 @@ export const ObservationCapture = forwardRef<ObservationCaptureHandle, { store: 
     const key = reviewQuestion.kind === "meta" ? `meta.${reviewQuestion.field}` : missingFieldKey(reviewQuestion);
     const nextSkipped = new Set(skippedFields).add(key);
     setSkippedFields(nextSkipped);
-    const next = getReviewQuestion(draft, nextSkipped, currentMeta);
-    push(msg("assistant", next ? questionTextFor(next, draft) : t("capture.reviewDone")));
+    askNextOrFinish(draft, nextSkipped, currentMeta);
   }
 
   /** Save button: starts the missing-field review if anything's missing, otherwise saves right away. */
@@ -422,7 +454,7 @@ export const ObservationCapture = forwardRef<ObservationCaptureHandle, { store: 
           </View>
         )}
 
-        {result && draft && (
+        {result && draft && !reviewing && (
           <>
             <Card style={styles.draftCard}>
               <Input label={t("capture.client")} value={draft.client ?? ""} onChangeText={(v) => setDraft({ ...draft, client: v })} placeholder={t("capture.clientPlaceholder")} />
@@ -449,32 +481,30 @@ export const ObservationCapture = forwardRef<ObservationCaptureHandle, { store: 
             </Card>
 
             <View style={[styles.bubble, styles.assistant, { gap: space.md }]}>
-              {reviewing ? (
-                awaitingAnswer ? (
-                  <>
-                    <Text style={theme.type.body}>{t("capture.answerFirst")}</Text>
-                    <Pressable onPress={skipReviewQuestion} accessibilityRole="button" hitSlop={8}>
-                      <Text style={styles.link}>{t("capture.skipQuestion")}</Text>
-                    </Pressable>
-                  </>
-                ) : (
-                  <>
-                    <Text style={theme.type.body}>{t("capture.reviewSummaryReady")}</Text>
-                    <Select label={t("capture.status")} value={status} options={OBSERVATION_STATUSES} labels={statuses} onChange={setStatus} placeholder={t("select.placeholder")} />
-                    <Button label={t("capture.confirmAndSave")} onPress={() => commitSave(status)} loading={saving} />
-                    <Pressable onPress={cancelReview} accessibilityRole="button" hitSlop={8}>
-                      <Text style={styles.link}>{t("capture.backToEdit")}</Text>
-                    </Pressable>
-                  </>
-                )
-              ) : (
-                <>
-                  <Text style={theme.type.body}>{t("capture.readyToSave")}</Text>
-                  <Select label={t("capture.status")} value={status} options={OBSERVATION_STATUSES} labels={statuses} onChange={setStatus} placeholder={t("select.placeholder")} />
-                  <Button label={t("capture.save")} onPress={() => startSaveOrReview(status)} loading={saving} />
-                </>
-              )}
+              <Text style={theme.type.body}>{t("capture.readyToSave")}</Text>
+              <Select label={t("capture.status")} value={status} options={OBSERVATION_STATUSES} labels={statuses} onChange={setStatus} placeholder={t("select.placeholder")} />
+              <Button label={t("capture.save")} onPress={() => startSaveOrReview(status)} loading={saving} />
             </View>
+          </>
+        )}
+
+        {result && draft && reviewing && (
+          <>
+            {awaitingAnswer ? (
+              <View style={[styles.bubble, styles.assistant, { gap: space.sm }]}>
+                <Pressable onPress={skipReviewQuestion} accessibilityRole="button" hitSlop={8}>
+                  <Text style={styles.link}>{t("capture.skipQuestion")}</Text>
+                </Pressable>
+              </View>
+            ) : (
+              <View style={[styles.bubble, styles.assistant, { gap: space.md }]}>
+                <Select label={t("capture.status")} value={status} options={OBSERVATION_STATUSES} labels={statuses} onChange={setStatus} placeholder={t("select.placeholder")} />
+                <Button label={t("capture.confirmAndSave")} onPress={() => commitSave(status)} loading={saving} />
+                <Pressable onPress={cancelReview} accessibilityRole="button" hitSlop={8}>
+                  <Text style={styles.link}>{t("capture.backToEdit")}</Text>
+                </Pressable>
+              </View>
+            )}
           </>
         )}
 
