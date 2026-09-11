@@ -46,20 +46,30 @@ export function ObservationCapture({ store, onBusyChange }: { store: Store; onBu
   const transcriptRef = useRef("");
   const scrollRef = useRef<ScrollView>(null);
   const [elapsedSec, setElapsedSec] = useState(0);
+  const [androidKeyboardHeight, setAndroidKeyboardHeight] = useState(0);
 
   useEffect(() => {
     onBusyChange?.(loading || saving);
   }, [loading, saving, onBusyChange]);
 
   useEffect(() => {
-    // Android's adjustResize shrinks the window when the keyboard opens, but the
-    // ScrollView keeps its old scroll offset — onContentSizeChange only fires on
-    // new content, not on this resize, so the last bubbles end up hidden under
-    // the keyboard until something explicitly re-scrolls to the end.
-    const sub = Keyboard.addListener("keyboardDidShow", () => {
+    // KeyboardAvoidingView shrinks itself by comparing its own bottom edge to the
+    // keyboard's top — but the tab bar below this screen (a sibling in App.tsx,
+    // outside this component) isn't part of that math, so the shrink comes up
+    // short by roughly the tab bar's height and the composer stays partly under
+    // the keyboard. Measuring the keyboard height directly and padding the
+    // composer with it sidesteps that miscalculation entirely on Android (iOS's
+    // "padding" behavior already accounts for this correctly on its own).
+    if (Platform.OS !== "android") return;
+    const showSub = Keyboard.addListener("keyboardDidShow", (e) => {
+      setAndroidKeyboardHeight(e.endCoordinates.height);
       scrollRef.current?.scrollToEnd({ animated: true });
     });
-    return () => sub.remove();
+    const hideSub = Keyboard.addListener("keyboardDidHide", () => setAndroidKeyboardHeight(0));
+    return () => {
+      showSub.remove();
+      hideSub.remove();
+    };
   }, []);
 
   useEffect(() => {
@@ -178,7 +188,7 @@ export function ObservationCapture({ store, onBusyChange }: { store: Store; onBu
   const canSend = !loading && text.trim().length >= (awaitingAnswer ? 2 : 10);
 
   return (
-    <KeyboardAvoidingView style={styles.root} behavior={Platform.OS === "ios" ? "padding" : "height"}>
+    <KeyboardAvoidingView style={styles.root} behavior={Platform.OS === "ios" ? "padding" : undefined}>
       <ScrollView
         ref={scrollRef}
         style={styles.thread}
@@ -244,7 +254,7 @@ export function ObservationCapture({ store, onBusyChange }: { store: Store; onBu
         {saved && <Button label="Nueva observación" variant="secondary" onPress={reset} style={styles.newBtn} />}
       </ScrollView>
 
-      <View style={styles.composer}>
+      <View style={[styles.composer, androidKeyboardHeight > 0 && { paddingBottom: space.md + androidKeyboardHeight }]}>
         <View style={styles.pair}>
           <Select style={styles.half} value={null} options={EXAMPLES} labels={EXAMPLE_LABELS} placeholder="Ejemplos" onChange={setText} />
           <Select style={styles.half} value={sourceType} options={SOURCE_TYPES} labels={SOURCE_LABELS} onChange={setSourceType} />
