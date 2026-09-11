@@ -3,7 +3,7 @@ import { Pressable, SectionList, StyleSheet, Text, View } from "react-native";
 import { MODALITIES, OBSERVATION_STATUSES, type ObservationRecord, type ObservationStatus } from "../../shared/observation";
 import type { useStore } from "../lib/store";
 import { Input, SectionHeader } from "../ui/primitives";
-import { MODALITY_LABELS, STATUS_COLOR, color, font, radius, space, type } from "../ui/theme";
+import { MODALITY_LABELS, font, radius, space, useTheme, type Theme } from "../ui/theme";
 
 type Store = ReturnType<typeof useStore>;
 type GroupKey = "fecha" | "pais" | "ciudad" | "hospital" | "az";
@@ -54,6 +54,8 @@ function buildSections(observations: ObservationRecord[], groupKey: GroupKey) {
 export function RecordsTab({ store, focusClient, onClearFocus }: {
   store: Store; focusClient: string | null; onClearFocus: () => void;
 }) {
+  const { theme } = useTheme();
+  const styles = makeStyles(theme);
   const [groupKey, setGroupKey] = useState<GroupKey>("fecha");
   const [editingId, setEditingId] = useState<number | null>(null);
 
@@ -105,7 +107,9 @@ export function RecordsTab({ store, focusClient, onClearFocus }: {
 function RecordRow({ record, onEdit, onDelete }: {
   record: ObservationRecord; onEdit: () => void; onDelete: () => void;
 }) {
-  const statusColor = STATUS_COLOR[record.status] ?? color.textTertiary;
+  const { theme } = useTheme();
+  const styles = makeStyles(theme);
+  const statusColor = theme.statusColor[record.status] ?? theme.color.textTertiary;
   return (
     <View style={styles.row}>
       <View style={styles.rowHeader}>
@@ -132,6 +136,8 @@ function RecordRow({ record, onEdit, onDelete }: {
 function RecordEditRow({ record, store, onDone }: {
   record: ObservationRecord; store: Store; onDone: () => void;
 }) {
+  const { theme } = useTheme();
+  const styles = makeStyles(theme);
   const [client, setClient] = useState(record.client ?? "");
   const [city, setCity] = useState(record.city ?? "");
   const [country, setCountry] = useState(record.country ?? "");
@@ -205,40 +211,43 @@ function RecordEditRow({ record, store, onDone }: {
   );
 }
 
-const styles = StyleSheet.create({
-  screen: { flex: 1, backgroundColor: color.bg },
-  focusChip: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", backgroundColor: color.surfaceMuted, marginHorizontal: space.lg, marginTop: space.md, padding: space.sm, borderRadius: radius.sm },
-  focusChipText: { fontFamily: font.medium, fontSize: 12, color: color.primary, flexShrink: 1, minWidth: 0 },
-  focusChipClearBtn: { flexShrink: 0, marginLeft: space.sm },
-  focusChipClear: { fontSize: 12, color: color.textSecondary },
-  groupRow: { flexDirection: "row", flexWrap: "wrap", gap: 6, paddingHorizontal: space.lg, paddingVertical: space.md },
-  groupBtn: { paddingHorizontal: 10, paddingVertical: 6, borderRadius: 16, backgroundColor: color.surface, borderWidth: 1, borderColor: color.border },
-  groupBtnActive: { backgroundColor: color.primary, borderColor: color.primary },
-  groupBtnText: { fontSize: 12, color: color.textSecondary },
-  groupBtnTextActive: { color: color.primaryText, fontFamily: font.semibold },
-  list: { flex: 1 },
-  listContent: { paddingHorizontal: space.lg, paddingBottom: 24 },
-  sectionHeader: { ...type.caption, fontFamily: font.semibold, textTransform: "uppercase", backgroundColor: color.bg, paddingVertical: 6 },
-  muted: { color: color.textTertiary, fontSize: 12, textAlign: "center", marginTop: 24 },
-  row: { backgroundColor: color.surface, borderRadius: radius.md, padding: space.md, marginBottom: space.sm, gap: 4, borderWidth: 1, borderColor: color.border },
-  rowEditing: { gap: space.sm, borderColor: color.primary },
-  rowHeader: { flexDirection: "row", justifyContent: "space-between", gap: space.sm },
-  rowClient: { ...type.bodyMedium, flexShrink: 1, minWidth: 0 },
-  rowStatus: { fontSize: 12, fontFamily: font.semibold, flexShrink: 0 },
-  rowMeta: { ...type.caption },
-  rowEquip: { ...type.secondary, color: color.text },
-  rowSource: { ...type.caption, fontStyle: "italic" },
-  rowActions: { flexDirection: "row", gap: space.lg, marginTop: 4 },
-  actionEdit: { fontSize: 12, fontFamily: font.semibold, color: color.link },
-  actionDelete: { fontSize: 12, fontFamily: font.semibold, color: color.danger },
-  actionSave: { fontSize: 13, fontFamily: font.semibold, color: color.link },
-  actionCancel: { fontSize: 13, color: color.textSecondary },
-  metaRow: { flexDirection: "row", gap: space.sm },
-  pickerWrap: { flexDirection: "row", flexWrap: "wrap", gap: 4 },
-  pickerBtn: { paddingHorizontal: 8, paddingVertical: 6, borderRadius: radius.sm, backgroundColor: color.surfaceMuted, borderWidth: 1, borderColor: color.border },
-  pickerBtnActive: { backgroundColor: color.primary, borderColor: color.primary },
-  pickerBtnText: { fontSize: 11, color: color.textSecondary },
-  pickerBtnTextActive: { color: color.primaryText },
-  equip: { backgroundColor: color.surfaceMuted, borderRadius: radius.sm, padding: space.sm, gap: space.sm },
-  inputNarrow: { width: 64 },
-});
+function makeStyles(theme: Theme) {
+  const { color } = theme;
+  return StyleSheet.create({
+    screen: { flex: 1, backgroundColor: color.bg },
+    focusChip: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", backgroundColor: color.surfaceMuted, marginHorizontal: space.lg, marginTop: space.md, padding: space.sm, borderRadius: radius.sm },
+    focusChipText: { fontFamily: font.medium, fontSize: 12, color: color.primary, flexShrink: 1, minWidth: 0 },
+    focusChipClearBtn: { flexShrink: 0, marginLeft: space.sm },
+    focusChipClear: { fontSize: 12, color: color.textSecondary },
+    groupRow: { flexDirection: "row", flexWrap: "wrap", gap: 6, paddingHorizontal: space.lg, paddingVertical: space.md },
+    groupBtn: { paddingHorizontal: 10, paddingVertical: 6, borderRadius: 16, backgroundColor: color.surface, borderWidth: 1, borderColor: color.border },
+    groupBtnActive: { backgroundColor: color.primary, borderColor: color.primary },
+    groupBtnText: { fontSize: 12, color: color.textSecondary },
+    groupBtnTextActive: { color: color.primaryText, fontFamily: font.semibold },
+    list: { flex: 1 },
+    listContent: { paddingHorizontal: space.lg, paddingBottom: 24 },
+    sectionHeader: { ...theme.type.caption, fontFamily: font.semibold, textTransform: "uppercase", backgroundColor: color.bg, paddingVertical: 6 },
+    muted: { color: color.textTertiary, fontSize: 12, textAlign: "center", marginTop: 24 },
+    row: { backgroundColor: color.surface, borderRadius: radius.md, padding: space.md, marginBottom: space.sm, gap: 4, borderWidth: 1, borderColor: color.border },
+    rowEditing: { gap: space.sm, borderColor: color.primary },
+    rowHeader: { flexDirection: "row", justifyContent: "space-between", gap: space.sm },
+    rowClient: { ...theme.type.bodyMedium, flexShrink: 1, minWidth: 0 },
+    rowStatus: { fontSize: 12, fontFamily: font.semibold, flexShrink: 0 },
+    rowMeta: { ...theme.type.caption },
+    rowEquip: { ...theme.type.secondary, color: color.text },
+    rowSource: { ...theme.type.caption, fontStyle: "italic" },
+    rowActions: { flexDirection: "row", gap: space.lg, marginTop: 4 },
+    actionEdit: { fontSize: 12, fontFamily: font.semibold, color: color.link },
+    actionDelete: { fontSize: 12, fontFamily: font.semibold, color: color.danger },
+    actionSave: { fontSize: 13, fontFamily: font.semibold, color: color.link },
+    actionCancel: { fontSize: 13, color: color.textSecondary },
+    metaRow: { flexDirection: "row", gap: space.sm },
+    pickerWrap: { flexDirection: "row", flexWrap: "wrap", gap: 4 },
+    pickerBtn: { paddingHorizontal: 8, paddingVertical: 6, borderRadius: radius.sm, backgroundColor: color.surfaceMuted, borderWidth: 1, borderColor: color.border },
+    pickerBtnActive: { backgroundColor: color.primary, borderColor: color.primary },
+    pickerBtnText: { fontSize: 11, color: color.textSecondary },
+    pickerBtnTextActive: { color: color.primaryText },
+    equip: { backgroundColor: color.surfaceMuted, borderRadius: radius.sm, padding: space.sm, gap: space.sm },
+    inputNarrow: { width: 64 },
+  });
+}

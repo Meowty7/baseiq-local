@@ -6,7 +6,7 @@ import { useStore } from "./src/lib/store";
 import { ObservationCapture } from "./src/components/ObservationCapture";
 import { RecordsTab } from "./src/components/RecordsTab";
 import { InsightsTab } from "./src/components/InsightsTab";
-import { color, font, type } from "./src/ui/theme";
+import { ThemeProvider, font, useTheme, type Theme } from "./src/ui/theme";
 
 type Tab = "capture" | "records" | "insights";
 
@@ -17,6 +17,16 @@ const TABS: { key: Tab; icon: string; label: string; title: string }[] = [
 ];
 
 export default function App() {
+  return (
+    <ThemeProvider>
+      <AppShell />
+    </ThemeProvider>
+  );
+}
+
+function AppShell() {
+  const { theme } = useTheme();
+  const styles = makeStyles(theme);
   const [fontsLoaded] = useFonts({ Inter_400Regular, Inter_500Medium, Inter_600SemiBold });
   const store = useStore();
   const [activeTab, setActiveTab] = useState<Tab>("capture");
@@ -39,13 +49,13 @@ export default function App() {
 
   return (
     <SafeAreaView style={styles.safe}>
-      <StatusBar barStyle="dark-content" backgroundColor={color.surface} />
+      <StatusBar barStyle={theme.mode === "dark" ? "light-content" : "dark-content"} backgroundColor={theme.color.surface} />
 
       <View style={styles.header}>
-        <Text style={type.title}>{current.title}</Text>
+        <Text style={theme.type.title}>{current.title}</Text>
         <View style={styles.aiStatus}>
-          <View style={[styles.dot, { backgroundColor: captureBusy ? color.warn : store.status.ready ? color.ok : color.textTertiary }]} />
-          <Text style={type.caption}>{aiLabel}</Text>
+          <View style={[styles.dot, { backgroundColor: captureBusy ? theme.color.warn : store.status.ready ? theme.color.ok : theme.color.textTertiary }]} />
+          <Text style={theme.type.caption}>{aiLabel}</Text>
         </View>
       </View>
 
@@ -79,23 +89,26 @@ export default function App() {
   );
 }
 
-const styles = StyleSheet.create({
-  safe: { flex: 1, backgroundColor: color.bg },
-  header: {
-    backgroundColor: color.surface, paddingHorizontal: 16, paddingTop: 12, paddingBottom: 12,
-    borderBottomWidth: 1, borderBottomColor: color.border, gap: 4,
-  },
-  aiStatus: { flexDirection: "row", alignItems: "center", gap: 6 },
-  dot: { width: 6, height: 6, borderRadius: 3 },
-  body: { flex: 1 },
-  panel: { ...StyleSheet.absoluteFill },
-  panelHidden: { opacity: 0 },
-  tabBar: { flexDirection: "row", backgroundColor: color.surface, borderTopWidth: 1, borderTopColor: color.border, paddingBottom: 18, paddingTop: 6 },
-  tabBtn: { flex: 1, alignItems: "center", paddingVertical: 10 },
-  tabInner: { alignItems: "center", gap: 2 },
-  tabIcon: { fontSize: 18, color: color.textTertiary },
-  tabIconActive: { color: color.primary },
-  tabLabel: { fontFamily: font.medium, fontSize: 13, color: color.textTertiary },
-  tabLabelActive: { color: color.text, fontFamily: font.semibold },
-  tabBusyDot: { position: "absolute", top: -2, right: -8, width: 6, height: 6, borderRadius: 3, backgroundColor: color.warn },
-});
+function makeStyles(theme: Theme) {
+  const { color } = theme;
+  return StyleSheet.create({
+    safe: { flex: 1, backgroundColor: color.bg },
+    header: {
+      backgroundColor: color.surface, paddingHorizontal: 16, paddingTop: 12, paddingBottom: 12,
+      borderBottomWidth: 1, borderBottomColor: color.border, gap: 4,
+    },
+    aiStatus: { flexDirection: "row", alignItems: "center", gap: 6 },
+    dot: { width: 6, height: 6, borderRadius: 3 },
+    body: { flex: 1 },
+    panel: { ...StyleSheet.absoluteFill },
+    panelHidden: { opacity: 0 },
+    tabBar: { flexDirection: "row", backgroundColor: color.surface, borderTopWidth: 1, borderTopColor: color.border, paddingBottom: 18, paddingTop: 6 },
+    tabBtn: { flex: 1, alignItems: "center", paddingVertical: 10 },
+    tabInner: { alignItems: "center", gap: 2 },
+    tabIcon: { fontSize: 18, color: color.textTertiary },
+    tabIconActive: { color: color.primary },
+    tabLabel: { fontFamily: font.medium, fontSize: 13, color: color.textTertiary },
+    tabLabelActive: { color: color.text, fontFamily: font.semibold },
+    tabBusyDot: { position: "absolute", top: -2, right: -8, width: 6, height: 6, borderRadius: 3, backgroundColor: color.warn },
+  });
+}

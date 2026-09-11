@@ -4,7 +4,7 @@ import { ActivityIndicator, KeyboardAvoidingView, Platform, Pressable, ScrollVie
 import { appendFollowUp, MODALITIES, type Modality, type ObservationDraft } from "../../shared/observation";
 import { type useStore, OBSERVATION_STATUSES, SOURCE_TYPES } from "../lib/store";
 import { Button, Card, Input, Select } from "../ui/primitives";
-import { MODALITY_LABELS, color, radius, space, type } from "../ui/theme";
+import { MODALITY_LABELS, radius, space, useTheme, type Theme } from "../ui/theme";
 
 type Store = ReturnType<typeof useStore>;
 
@@ -28,6 +28,8 @@ const msgId = () => `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
 const msg = (role: Msg["role"], text: string, caption?: string): Msg => ({ id: msgId(), role, text, caption });
 
 export function ObservationCapture({ store, onBusyChange }: { store: Store; onBusyChange?: (busy: boolean) => void }) {
+  const { theme } = useTheme();
+  const styles = makeStyles(theme);
   const [messages, setMessages] = useState<Msg[]>(() => [msg("assistant", GREETING)]);
   const [text, setText] = useState("");
   const [loading, setLoading] = useState(false);
@@ -177,10 +179,10 @@ export function ObservationCapture({ store, onBusyChange }: { store: Store; onBu
 
         {loading && (
           <View style={[styles.bubble, styles.assistant, styles.loadingRow]}>
-            <ActivityIndicator color={color.textSecondary} />
+            <ActivityIndicator color={theme.color.textSecondary} />
             <View style={{ flex: 1, gap: 2 }}>
-              <Text style={type.body}>Extrayendo con IA local…</Text>
-              <Text style={type.caption}>
+              <Text style={theme.type.body}>Extrayendo con IA local…</Text>
+              <Text style={theme.type.caption}>
                 {elapsedSec > 0 ? `${elapsedSec} s transcurridos` : "Iniciando…"}
                 {getDevice() ? ` · ${getDevice()?.toUpperCase()}` : ""}
               </Text>
@@ -199,7 +201,7 @@ export function ObservationCapture({ store, onBusyChange }: { store: Store; onBu
 
               {draft.equipment.map((eq, i) => (
                 <View key={i} style={styles.equipment}>
-                  <Text style={type.heading}>Equipo {i + 1}</Text>
+                  <Text style={theme.type.heading}>Equipo {i + 1}</Text>
                   <Select label="Modalidad" value={(eq.modality ?? "otra") as Modality} options={MODALITIES} labels={MODALITY_LABELS} onChange={(v) => updateEquipment(i, "modality", v)} />
                   <View style={styles.pair}>
                     <Input style={styles.half} label="Cantidad" keyboardType="numeric" value={eq.quantity == null ? "" : String(eq.quantity)} onChangeText={(v) => updateEquipment(i, "quantity", toInt(v))} />
@@ -215,7 +217,7 @@ export function ObservationCapture({ store, onBusyChange }: { store: Store; onBu
             </Card>
 
             <View style={[styles.bubble, styles.assistant, { gap: space.md }]}>
-              <Text style={type.body}>Cuando esté correcto, elige el estado y guarda.</Text>
+              <Text style={theme.type.body}>Cuando esté correcto, elige el estado y guarda.</Text>
               <Select label="Estado" value={status} options={OBSERVATION_STATUSES} onChange={setStatus} />
               <Button label="Guardar observación" onPress={() => confirm(status)} loading={saving} />
             </View>
@@ -224,7 +226,7 @@ export function ObservationCapture({ store, onBusyChange }: { store: Store; onBu
 
         {error && (
           <View style={[styles.bubble, styles.assistant]}>
-            <Text style={[type.body, { color: color.danger }]}>{error}</Text>
+            <Text style={[theme.type.body, { color: theme.color.danger }]}>{error}</Text>
           </View>
         )}
 
@@ -262,11 +264,13 @@ export function ObservationCapture({ store, onBusyChange }: { store: Store; onBu
 }
 
 function Bubble({ msg: m }: { msg: Msg }) {
+  const { theme } = useTheme();
+  const styles = makeStyles(theme);
   const user = m.role === "user";
   return (
     <View style={[styles.bubble, user ? styles.user : styles.assistant]}>
-      <Text style={[type.body, user && { color: color.primaryText }]}>{m.text}</Text>
-      {m.caption ? <Text style={[type.caption, styles.caption]}>{m.caption}</Text> : null}
+      <Text style={[theme.type.body, user && { color: theme.color.primaryText }]}>{m.text}</Text>
+      {m.caption ? <Text style={[theme.type.caption, styles.caption]}>{m.caption}</Text> : null}
     </View>
   );
 }
@@ -278,24 +282,27 @@ interface ExtractionResultLocal {
   sourceText: string;
 }
 
-const styles = StyleSheet.create({
-  root: { flex: 1, backgroundColor: color.bg },
-  thread: { flex: 1 },
-  threadContent: { padding: space.lg, gap: space.sm },
-  bubble: { maxWidth: "85%", borderRadius: radius.lg, paddingHorizontal: space.md, paddingVertical: space.sm + 2 },
-  assistant: { alignSelf: "flex-start", backgroundColor: color.surfaceMuted },
-  user: { alignSelf: "flex-end", backgroundColor: color.primary },
-  caption: { marginTop: space.xs },
-  loadingRow: { flexDirection: "row", alignItems: "center", gap: space.sm },
-  draftCard: { alignSelf: "stretch", padding: space.md, gap: space.md },
-  equipment: { gap: space.sm, paddingTop: space.md, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: color.border },
-  pair: { flexDirection: "row", gap: space.sm },
-  half: { flex: 1 },
-  evidence: { ...type.secondary, fontStyle: "italic" },
-  newBtn: { alignSelf: "flex-start" },
-  composer: { backgroundColor: color.surface, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: color.border, padding: space.md, gap: space.sm },
-  link: { ...type.caption, color: color.link, alignSelf: "flex-start" },
-  sendRow: { flexDirection: "row", alignItems: "flex-end", gap: space.sm },
-  sendBtn: { minHeight: 44, paddingHorizontal: space.md },
-  composerInput: { minHeight: 44, maxHeight: 120 },
-});
+function makeStyles(theme: Theme) {
+  const { color } = theme;
+  return StyleSheet.create({
+    root: { flex: 1, backgroundColor: color.bg },
+    thread: { flex: 1 },
+    threadContent: { padding: space.lg, gap: space.sm },
+    bubble: { maxWidth: "85%", borderRadius: radius.lg, paddingHorizontal: space.md, paddingVertical: space.sm + 2 },
+    assistant: { alignSelf: "flex-start", backgroundColor: color.surfaceMuted },
+    user: { alignSelf: "flex-end", backgroundColor: color.primary },
+    caption: { marginTop: space.xs },
+    loadingRow: { flexDirection: "row", alignItems: "center", gap: space.sm },
+    draftCard: { alignSelf: "stretch", padding: space.md, gap: space.md },
+    equipment: { gap: space.sm, paddingTop: space.md, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: color.border },
+    pair: { flexDirection: "row", gap: space.sm },
+    half: { flex: 1 },
+    evidence: { ...theme.type.secondary, fontStyle: "italic" },
+    newBtn: { alignSelf: "flex-start" },
+    composer: { backgroundColor: color.surface, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: color.border, padding: space.md, gap: space.sm },
+    link: { ...theme.type.caption, color: color.link, alignSelf: "flex-start" },
+    sendRow: { flexDirection: "row", alignItems: "flex-end", gap: space.sm },
+    sendBtn: { minHeight: 44, paddingHorizontal: space.md },
+    composerInput: { minHeight: 44, maxHeight: 120 },
+  });
+}
