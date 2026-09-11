@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useFonts } from "expo-font";
 import { Inter_400Regular, Inter_500Medium, Inter_600SemiBold } from "@expo-google-fonts/inter";
 import {
-  Animated, BackHandler, Dimensions, PanResponder, Platform, Pressable, SafeAreaView, StatusBar, StyleSheet, Text, ToastAndroid, View,
+  Animated, BackHandler, Dimensions, Easing, PanResponder, Platform, Pressable, SafeAreaView, StatusBar, StyleSheet, Text, ToastAndroid, View,
 } from "react-native";
 import { useStore } from "./src/lib/store";
 import { ObservationCapture, type ObservationCaptureHandle } from "./src/components/ObservationCapture";
@@ -54,21 +54,30 @@ function AppShell() {
 
   const screenWidth = Dimensions.get("window").width;
   const activeIndex = TABS.findIndex((t) => t.key === activeTab);
-  // Tracks live drag offset (in the -1..1 tab-width range) on top of the
-  // settled position for the active tab, so the whole row slides under the
-  // finger and springs the rest of the way on release instead of just
-  // popping to the new panel.
-  const dragX = useRef(new Animated.Value(0)).current;
+  // trackX is the single source of truth for the row's position, in drag and
+  // at rest alike — the finger writes straight into it during the gesture,
+  // and release animates it onward from wherever it already sits. Switching
+  // to a separate dragX-on-top-of-trackX model (reset to 0 on release, with
+  // trackX only catching up a render later via useEffect) caused a visible
+  // jump-then-pause: the row snapped back to its old resting spot the instant
+  // you lifted your finger, then paused until the effect fired and the
+  // animation finally started.
   const trackX = useRef(new Animated.Value(-activeIndex * screenWidth)).current;
+  const trackXBase = useRef(-activeIndex * screenWidth);
+  const animateTrackTo = useCallback((idx: number) => {
+    trackXBase.current = -idx * screenWidth;
+    Animated.timing(trackX, {
+      toValue: trackXBase.current,
+      duration: 240,
+      easing: Easing.out(Easing.cubic),
+      useNativeDriver: true,
+    }).start();
+  }, [screenWidth, trackX]);
 
   useEffect(() => {
-    Animated.spring(trackX, {
-      toValue: -activeIndex * screenWidth,
-      useNativeDriver: true,
-      bounciness: 6,
-      speed: 16,
-    }).start();
-  }, [activeIndex, screenWidth, trackX]);
+    animateTrackTo(activeIndex);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeIndex]);
 
   const lastBackPressRef = useRef(0);
 
@@ -107,25 +116,25 @@ function AppShell() {
     PanResponder.create({
       onMoveShouldSetPanResponder: (_, g) =>
         Math.abs(g.dx) > 20 && Math.abs(g.dx) > Math.abs(g.dy) * SWIPE_DIRECTION_RATIO,
+      onPanResponderGrant: () => {
+        trackX.stopAnimation((value) => { trackXBase.current = value; });
+      },
       onPanResponderMove: (_, g) => {
         const idx = TABS.findIndex((t) => t.key === activeTabRef.current);
         // Resist dragging past the first/last tab instead of letting it slide into empty space.
-        if ((idx === 0 && g.dx > 0) || (idx === TABS.length - 1 && g.dx < 0)) {
-          dragX.setValue(g.dx / 3);
-        } else {
-          dragX.setValue(g.dx);
-        }
+        const resisted = (idx === 0 && g.dx > 0) || (idx === TABS.length - 1 && g.dx < 0) ? g.dx / 3 : g.dx;
+        trackX.setValue(trackXBase.current + resisted);
       },
       onPanResponderRelease: (_, g) => {
         const idx = TABS.findIndex((t) => t.key === activeTabRef.current);
-        dragX.setValue(0);
         if (g.dx <= -SWIPE_DISTANCE && idx < TABS.length - 1) setActiveTab(TABS[idx + 1].key);
         else if (g.dx >= SWIPE_DISTANCE && idx > 0) setActiveTab(TABS[idx - 1].key);
-        else {
-          Animated.spring(trackX, { toValue: -idx * screenWidth, useNativeDriver: true, bounciness: 6, speed: 16 }).start();
-        }
+        else animateTrackTo(idx);
       },
-      onPanResponderTerminate: () => dragX.setValue(0),
+      onPanResponderTerminate: () => {
+        const idx = TABS.findIndex((t) => t.key === activeTabRef.current);
+        animateTrackTo(idx);
+      },
     }),
   ).current;
 
@@ -161,7 +170,7 @@ function AppShell() {
         <Animated.View
           style={[
             styles.track,
-            { width: screenWidth * TABS.length, transform: [{ translateX: Animated.add(trackX, dragX) }] },
+            { width: screenWidth * TABS.length, transform: [{ translateX: trackX }] },
           ]}
         >
           <View style={[styles.panel, { width: screenWidth }]} pointerEvents={activeTab === "capture" ? "auto" : "none"}>
