@@ -282,7 +282,7 @@ export const ObservationCapture = forwardRef<ObservationCaptureHandle, { store: 
         {saved && <Button label="Nueva observación" variant="secondary" onPress={reset} style={styles.newBtn} />}
       </ScrollView>
 
-      <View style={[styles.composer, androidKeyboardHeight > 0 && { paddingBottom: space.md + androidKeyboardHeight }]}>
+      <View style={[styles.composer, androidKeyboardHeight > 0 && { paddingBottom: androidKeyboardHeight }]}>
         <View style={styles.pair}>
           <Select style={styles.half} value={null} options={EXAMPLES} labels={EXAMPLE_LABELS} placeholder="Ejemplos" onChange={setText} />
           <Select style={styles.half} value={sourceType} options={SOURCE_TYPES} labels={SOURCE_LABELS} onChange={setSourceType} />
