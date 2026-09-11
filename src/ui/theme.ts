@@ -1,18 +1,19 @@
-// Sistema sobrio orientado a lectura: neutros, un solo acento, color solo para semántica de estado (texto/punto).
+// Paleta compartida con la rama ui-fix: menta/teal como acento sobre base clara,
+// color solo para semántica de estado (texto/punto), resto en neutros.
 export const color = {
-  bg: "#F6F7F8",
+  bg: "#F5F8F7",
   surface: "#FFFFFF",
-  surfaceMuted: "#F1F2F4",
-  border: "#E4E6EA",
-  text: "#111827",
-  textSecondary: "#5B6472",
-  textTertiary: "#9AA1AB",
-  primary: "#111827",
+  surfaceMuted: "#EEF3F1",
+  border: "#DCE6E2",
+  text: "#131A18",
+  textSecondary: "#5B6866",
+  textTertiary: "#9AA6A3",
+  primary: "#0FA98A",
   primaryText: "#FFFFFF",
-  link: "#1D4ED8",
-  ok: "#15803D",
+  link: "#2563EB",
+  ok: "#0FA98A",
   warn: "#B45309",
-  danger: "#B91C1C",
+  danger: "#DC2626",
 } as const;
 
 export const font = {
@@ -47,4 +48,10 @@ export const STATUS_COLOR: Record<string, string> = {
   Reportado: color.link,
   Estimado: color.warn,
   Desconocido: color.textTertiary,
+};
+
+export const FRESHNESS_COLOR: Record<string, string> = {
+  reciente: color.ok,
+  "por verificar": color.warn,
+  desactualizada: color.danger,
 };

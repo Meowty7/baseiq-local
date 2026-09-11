@@ -1,27 +1,32 @@
 import { useState, useCallback } from "react";
 import { useFonts } from "expo-font";
 import { Inter_400Regular, Inter_500Medium, Inter_600SemiBold } from "@expo-google-fonts/inter";
-import { Pressable, SafeAreaView, ScrollView, StatusBar, StyleSheet, Text, View } from "react-native";
+import { Pressable, SafeAreaView, StatusBar, StyleSheet, Text, View } from "react-native";
 import { useStore } from "./src/lib/store";
 import { ObservationCapture } from "./src/components/ObservationCapture";
-import { ClientInstalledBase } from "./src/components/ClientInstalledBase";
-import { OverviewDashboard } from "./src/components/OverviewDashboard";
+import { RecordsTab } from "./src/components/RecordsTab";
+import { InsightsTab } from "./src/components/InsightsTab";
 import { color, font, type } from "./src/ui/theme";
 
-type Tab = "today" | "capture" | "clients";
+type Tab = "capture" | "records" | "insights";
 
-const TABS: { key: Tab; label: string; title: string }[] = [
-  { key: "today", label: "Resumen", title: "Resumen" },
-  { key: "capture", label: "Capturar", title: "Nueva observación" },
-  { key: "clients", label: "Clientes", title: "Clientes" },
+const TABS: { key: Tab; icon: string; label: string; title: string }[] = [
+  { key: "capture", icon: "＋", label: "Captura", title: "Nueva observación" },
+  { key: "records", icon: "☰", label: "Registros", title: "Registros" },
+  { key: "insights", icon: "◈", label: "Insights", title: "Insights" },
 ];
 
 export default function App() {
   const [fontsLoaded] = useFonts({ Inter_400Regular, Inter_500Medium, Inter_600SemiBold });
   const store = useStore();
-  const [activeTab, setActiveTab] = useState<Tab>("today");
+  const [activeTab, setActiveTab] = useState<Tab>("capture");
   const [captureBusy, setCaptureBusy] = useState(false);
   const onCaptureBusy = useCallback((busy: boolean) => setCaptureBusy(busy), []);
+  const [focusClient, setFocusClient] = useState<string | null>(null);
+  const goToRecords = useCallback((client: string) => {
+    setFocusClient(client);
+    setActiveTab("records");
+  }, []);
 
   if (!fontsLoaded) return <SafeAreaView style={styles.safe} />;
 
@@ -48,11 +53,11 @@ export default function App() {
         <View style={[styles.panel, activeTab !== "capture" && styles.panelHidden]} pointerEvents={activeTab === "capture" ? "auto" : "none"}>
           <ObservationCapture store={store} onBusyChange={onCaptureBusy} />
         </View>
-        {activeTab !== "capture" && (
-          <ScrollView style={styles.scroll} contentContainerStyle={styles.content}>
-            {activeTab === "today" && <OverviewDashboard overview={store.overview} observations={store.observations} />}
-            {activeTab === "clients" && <ClientInstalledBase observations={store.observations} />}
-          </ScrollView>
+        {activeTab === "records" && (
+          <RecordsTab store={store} focusClient={focusClient} onClearFocus={() => setFocusClient(null)} />
+        )}
+        {activeTab === "insights" && (
+          <InsightsTab overview={store.overview} observations={store.observations} onViewClient={goToRecords} />
         )}
       </View>
 
@@ -61,7 +66,8 @@ export default function App() {
           const active = activeTab === tab.key;
           return (
             <Pressable key={tab.key} style={styles.tabBtn} onPress={() => setActiveTab(tab.key)} accessibilityRole="button" accessibilityState={{ selected: active }}>
-              <View>
+              <View style={styles.tabInner}>
+                <Text style={[styles.tabIcon, active && styles.tabIconActive]}>{tab.icon}</Text>
                 <Text style={[styles.tabLabel, active && styles.tabLabelActive]}>{tab.label}</Text>
                 {tab.key === "capture" && captureBusy && activeTab !== "capture" && <View style={styles.tabBusyDot} />}
               </View>
@@ -84,10 +90,11 @@ const styles = StyleSheet.create({
   body: { flex: 1 },
   panel: { ...StyleSheet.absoluteFill },
   panelHidden: { opacity: 0 },
-  scroll: { flex: 1 },
-  content: { padding: 16, gap: 24, paddingBottom: 32 },
   tabBar: { flexDirection: "row", backgroundColor: color.surface, borderTopWidth: 1, borderTopColor: color.border, paddingBottom: 18, paddingTop: 6 },
   tabBtn: { flex: 1, alignItems: "center", paddingVertical: 10 },
+  tabInner: { alignItems: "center", gap: 2 },
+  tabIcon: { fontSize: 18, color: color.textTertiary },
+  tabIconActive: { color: color.primary },
   tabLabel: { fontFamily: font.medium, fontSize: 13, color: color.textTertiary },
   tabLabelActive: { color: color.text, fontFamily: font.semibold },
   tabBusyDot: { position: "absolute", top: -2, right: -8, width: 6, height: 6, borderRadius: 3, backgroundColor: color.warn },

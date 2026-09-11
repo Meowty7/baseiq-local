@@ -4,7 +4,9 @@ import { aggregate360, type Client360Row, type ObservationRecord } from "../../s
 import { Card, Input, Row, SectionHeader, StatusText } from "../ui/primitives";
 import { MODALITY_LABELS, STATUS_COLOR, color, font, space, type } from "../ui/theme";
 
-export function ClientInstalledBase({ observations }: { observations: ObservationRecord[] }) {
+export function ClientInstalledBase({ observations, onViewClient }: {
+  observations: ObservationRecord[]; onViewClient?: (client: string) => void;
+}) {
   const [query, setQuery] = useState("");
 
   const byClient = useMemo(() => {
@@ -43,7 +45,13 @@ export function ClientInstalledBase({ observations }: { observations: Observatio
             <Card><Row label={`Sin resultados para “${query.trim()}”`} last /></Card>
           ) : (
             byClient.map(([client, list]) => (
-              <ClientCard key={client} client={client} list={list} observations={observations.filter((o) => o.client === client)} />
+              <ClientCard
+                key={client}
+                client={client}
+                list={list}
+                observations={observations.filter((o) => o.client === client)}
+                onViewClient={onViewClient}
+              />
             ))
           )}
         </View>
@@ -52,7 +60,9 @@ export function ClientInstalledBase({ observations }: { observations: Observatio
   );
 }
 
-function ClientCard({ client, list, observations }: { client: string; list: Client360Row[]; observations: ObservationRecord[] }) {
+function ClientCard({ client, list, observations, onViewClient }: {
+  client: string; list: Client360Row[]; observations: ObservationRecord[]; onViewClient?: (client: string) => void;
+}) {
   const [expanded, setExpanded] = useState(false);
   const location = [list[0]?.city, list[0]?.country].filter(Boolean).join(", ");
   const newest = [...observations].sort((a, b) => b.id - a.id)[0];
@@ -62,7 +72,14 @@ function ClientCard({ client, list, observations }: { client: string; list: Clie
   return (
     <Card>
       <Pressable onPress={() => setExpanded(!expanded)} accessibilityRole="button" style={({ pressed }) => [styles.header, pressed && styles.pressed]}>
-        <Text style={type.heading}>{client}</Text>
+        <View style={styles.headerTop}>
+          <Text style={[type.heading, styles.headerTitle]}>{client}</Text>
+          {onViewClient && (
+            <Pressable onPress={() => onViewClient(client)} accessibilityRole="button" hitSlop={8}>
+              <Text style={styles.footerText}>Ver registros ›</Text>
+            </Pressable>
+          )}
+        </View>
         <Text style={type.secondary}>{meta}</Text>
       </Pressable>
 
@@ -116,6 +133,8 @@ function ObservationBlock({ o }: { o: ObservationRecord }) {
 
 const styles = StyleSheet.create({
   header: { padding: space.lg, gap: 2, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: color.border },
+  headerTop: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: space.sm },
+  headerTitle: { flex: 1 },
   row: { flexDirection: "row", alignItems: "center", gap: space.md, paddingHorizontal: space.lg, paddingVertical: 13 },
   rowMain: { flex: 1, gap: 2 },
   divider: { borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: color.border },

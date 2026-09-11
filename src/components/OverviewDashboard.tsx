@@ -1,4 +1,4 @@
-import { Fragment, useState } from "react";
+import { Fragment } from "react";
 import { StyleSheet, Text, View } from "react-native";
 import type { ObservationRecord } from "../../shared/observation";
 import type { OverviewResult } from "../lib/store";
@@ -30,7 +30,6 @@ export function OverviewDashboard({ overview, observations }: { overview: Overvi
   }
 
   const recent = [...observations].sort((a, b) => b.id - a.id).slice(0, 8);
-  const geoTree = buildGeoTree(observations);
   const modEntries = Object.entries(overview.byModality);
   const issueCount = overview.conflicts.length + overview.duplicates.length;
 
@@ -105,57 +104,10 @@ export function OverviewDashboard({ overview, observations }: { overview: Overvi
           )}
         </Card>
       </View>
-
-      <View>
-        <SectionHeader title="Por país" />
-        <Card>
-          {geoTree.length === 0 ? <Row label="Sin datos geográficos" last /> : (
-            geoTree.map((g, i) => <GeoNode key={g.country} node={g} last={i === geoTree.length - 1} />)
-          )}
-        </Card>
-      </View>
     </View>
-  );
-}
-
-interface GeoNodeData { country: string; total: number; cities: { city: string; clients: { client: string; n: number }[] }[] }
-
-function buildGeoTree(obs: ObservationRecord[]): GeoNodeData[] {
-  const tree = new Map<string, Map<string, Map<string, number>>>();
-  for (const o of obs) {
-    const country = o.country ?? "Sin país";
-    const city = o.city ?? "Sin ciudad";
-    const client = o.client ?? "Sin cliente";
-    const cities = tree.get(country) ?? new Map();
-    const clients = cities.get(city) ?? new Map();
-    clients.set(client, (clients.get(client) ?? 0) + 1);
-    cities.set(city, clients);
-    tree.set(country, cities);
-  }
-  return [...tree.entries()].map(([country, cities]) => ({
-    country,
-    cities: [...cities.entries()].map(([city, clients]) => ({
-      city,
-      clients: [...clients.entries()].map(([client, n]) => ({ client, n })),
-    })),
-  })).map((g) => ({ ...g, total: g.cities.reduce((a, c) => a + c.clients.reduce((b, cl) => b + cl.n, 0), 0) }));
-}
-
-function GeoNode({ node, last }: { node: GeoNodeData; last: boolean }) {
-  const [expanded, setExpanded] = useState(false);
-  return (
-    <>
-      <Row label={node.country} value={`${node.total} obs.`} onPress={() => setExpanded(!expanded)} last={last && !expanded} />
-      {expanded && node.cities.map((c, i) => (
-        <View key={c.city} style={styles.cityIndent}>
-          <Row label={c.city} detail={c.clients.map((cl) => `${cl.client} (${cl.n})`).join(", ")} last={last && i === node.cities.length - 1} />
-        </View>
-      ))}
-    </>
   );
 }
 
 const styles = StyleSheet.create({
   groupLabel: { ...type.caption, paddingHorizontal: space.lg, paddingTop: space.md, paddingBottom: space.xs },
-  cityIndent: { paddingLeft: space.lg },
 });
