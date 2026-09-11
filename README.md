@@ -4,6 +4,8 @@ Prototipo Philips (Track 01) + Reto Tether: QVAC Psy (Track 02) + Desafío Gener
 
 Un colaborador de campo elige su idioma, escribe lo que vio en un hospital, y la app traduce y extrae el inventario con IA **en el dispositivo**. El usuario revisa y confirma, y los datos se agregan por cliente y geografía. Sin internet, sin nube.
 
+**Demo:** https://qvac.belta.dev/demo/
+
 ## Idiomas
 
 18 idiomas, a elegir al iniciar: **ES, PT, EN, FR, DE, IT, NL, PL, RO, CS, SV, DA, RU, TR, AR, ZH, JA, KO**.
