@@ -1,14 +1,15 @@
 {
   "version": 1,
-  "bundleId": "f641140d687bb3f8ecc3327dc9b108c9a24198ca47c15998176ae9bab7b7e0ec",
+  "bundleId": "880c522535b6c594ef9fac67c5d08ad895a97f690f85dc7d96058fb6e9905fb8",
   "addons": [
+    "@qvac/asr-ggml",
     "@qvac/llm-llamacpp",
     "@qvac/translation-nmtcpp",
-    "@qvac/asr-ggml",
     "bare-buffer",
     "bare-cpu-info",
     "bare-crypto",
     "bare-dns",
+    "bare-ffmpeg",
     "bare-fs",
     "bare-gpu-info",
     "bare-hrtime",
