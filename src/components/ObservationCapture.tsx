@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { getDevice } from "../lib/qvac";
-import { ActivityIndicator, KeyboardAvoidingView, Platform, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
+import { ActivityIndicator, Keyboard, KeyboardAvoidingView, Platform, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import { appendFollowUp, MODALITIES, type Modality, type ObservationDraft } from "../../shared/observation";
 import { type useStore, OBSERVATION_STATUSES, SOURCE_TYPES } from "../lib/store";
 import { Button, Card, Input, Select } from "../ui/primitives";
@@ -50,6 +50,17 @@ export function ObservationCapture({ store, onBusyChange }: { store: Store; onBu
   useEffect(() => {
     onBusyChange?.(loading || saving);
   }, [loading, saving, onBusyChange]);
+
+  useEffect(() => {
+    // Android's adjustResize shrinks the window when the keyboard opens, but the
+    // ScrollView keeps its old scroll offset — onContentSizeChange only fires on
+    // new content, not on this resize, so the last bubbles end up hidden under
+    // the keyboard until something explicitly re-scrolls to the end.
+    const sub = Keyboard.addListener("keyboardDidShow", () => {
+      scrollRef.current?.scrollToEnd({ animated: true });
+    });
+    return () => sub.remove();
+  }, []);
 
   useEffect(() => {
     if (!loading) {
