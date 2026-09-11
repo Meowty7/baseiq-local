@@ -6,10 +6,48 @@ import { type useStore, OBSERVATION_STATUSES, SOURCE_TYPES } from "../lib/store"
 import { Button, Card, Input, Select } from "../ui/primitives";
 import { radius, space, useTheme, type Theme } from "../ui/theme";
 import { modalityLabels, statusLabels, useI18n } from "../i18n";
-import { useAudioRecorder, RecordingPresets, requestRecordingPermissionsAsync, setAudioModeAsync } from "expo-audio";
+import { useAudioRecorder, AudioQuality, IOSOutputFormat, requestRecordingPermissionsAsync, setAudioModeAsync, type RecordingOptions } from "expo-audio";
 import * as ImagePicker from "expo-image-picker";
+import { DICTATION_BIT_RATE, DICTATION_SAMPLE_RATE } from "../lib/media";
 
 type Store = ReturnType<typeof useStore>;
+
+/**
+ * Whisper consumes 16 kHz mono. The HIGH_QUALITY preset (44.1 kHz stereo,
+ * 128 kbps) recorded ~6× more data that the worker then had to decode and
+ * resample before a single token came out. Mono AAC at 16 kHz keeps a
+ * 30 s dictation under 200 KB and the FFmpeg pass nearly free.
+ */
+const DICTATION_RECORDING: RecordingOptions = {
+  extension: ".m4a",
+  sampleRate: DICTATION_SAMPLE_RATE,
+  numberOfChannels: 1,
+  bitRate: DICTATION_BIT_RATE,
+  android: {
+    outputFormat: "mpeg4",
+    audioEncoder: "aac",
+  },
+  ios: {
+    outputFormat: IOSOutputFormat.MPEG4AAC,
+    audioQuality: AudioQuality.MEDIUM,
+    linearPCMBitDepth: 16,
+    linearPCMIsBigEndian: false,
+    linearPCMIsFloat: false,
+  },
+  web: {
+    mimeType: "audio/webm",
+    bitsPerSecond: DICTATION_BIT_RATE,
+  },
+};
+
+/** Below this, Whisper only ever returns silence markers; skip the model run. */
+const MIN_DICTATION_MS = 700;
+
+type MediaStage =
+  | { kind: "voice-load"; pct: number }
+  | { kind: "image-prepare" }
+  | { kind: "vision-load"; pct: number }
+  | null;
 
 const EXAMPLES = [
   "Estoy en Hospital DemoCare Pacific, en Panamá. Vi dos resonadores y un tomógrafo. Uno de los resonadores parece de unos ocho años.",
@@ -61,11 +99,14 @@ export const ObservationCapture = forwardRef<ObservationCaptureHandle, { store: 
   const [recording, setRecording] = useState(false);
   const [transcribing, setTranscribing] = useState(false);
   const [analyzingImage, setAnalyzingImage] = useState(false);
+  /** What the busy bubble should say while dictation/photo work runs. */
+  const [mediaStage, setMediaStage] = useState<MediaStage>(null);
   const transcriptRef = useRef("");
   const scrollRef = useRef<ScrollView>(null);
   const [elapsedSec, setElapsedSec] = useState(0);
   const [androidKeyboardHeight, setAndroidKeyboardHeight] = useState(0);
-  const recorder = useAudioRecorder(RecordingPresets.HIGH_QUALITY);
+  const recorder = useAudioRecorder(DICTATION_RECORDING);
+  const recordStartRef = useRef(0);
 
   useEffect(() => {
     onBusyChange?.(loading || saving || transcribing || analyzingImage);
@@ -95,8 +136,9 @@ export const ObservationCapture = forwardRef<ObservationCaptureHandle, { store: 
     };
   }, [tabBarHeight]);
 
+  const working = loading || transcribing || analyzingImage;
   useEffect(() => {
-    if (!loading) {
+    if (!working) {
       setElapsedSec(0);
       return;
     }
@@ -104,7 +146,7 @@ export const ObservationCapture = forwardRef<ObservationCaptureHandle, { store: 
     setElapsedSec(0);
     const id = setInterval(() => setElapsedSec(Math.floor((Date.now() - t0) / 1000)), 500);
     return () => clearInterval(id);
-  }, [loading]);
+  }, [working]);
 
   const push = (...items: Msg[]) => setMessages((prev) => [...prev, ...items]);
   const awaitingAnswer = !!result?.question && !questionSkipped;
@@ -152,21 +194,51 @@ export const ObservationCapture = forwardRef<ObservationCaptureHandle, { store: 
     }
   }
 
+  function mediaErrorMessage(e: unknown, fallbackKey: string): string {
+    const code = e instanceof Error ? e.message : "";
+    if (code === "load_timeout") return t("capture.loadTimeout");
+    if (code === "infer_timeout" || code === "transcribe_timeout") return t("capture.timeout");
+    if (code === "model_busy") return t("capture.busy");
+    return t(fallbackKey);
+  }
+
+  function recordedDurationMs(): number {
+    let ms = 0;
+    try {
+      ms = recorder.getStatus().durationMillis ?? 0;
+    } catch {
+      /* recorder already released */
+    }
+    if (!ms && recordStartRef.current) ms = Date.now() - recordStartRef.current;
+    return ms;
+  }
+
   async function toggleMic() {
     if (transcribing || analyzingImage) return;
     if (recording) {
+      const durationMs = recordedDurationMs();
       await recorder.stop();
       setRecording(false);
       const uri = recorder.uri;
       if (!uri) return;
+      if (durationMs > 0 && durationMs < MIN_DICTATION_MS) {
+        setError(t("capture.recordingTooShort"));
+        return;
+      }
+      setError(null);
       setTranscribing(true);
+      setMediaStage(null);
       try {
-        const transcript = await store.transcribe(uri);
+        const transcript = await store.transcribe(uri, {
+          durationMs,
+          onLoadProgress: (pct) => setMediaStage(pct >= 100 ? null : { kind: "voice-load", pct }),
+        });
         if (transcript.trim()) setText((prev) => (prev.trim() ? `${prev} ` : "") + transcript.trim());
       } catch (e) {
-        setError(t("capture.micError"));
+        setError(mediaErrorMessage(e, "capture.micError"));
       } finally {
         setTranscribing(false);
+        setMediaStage(null);
       }
       return;
     }
@@ -175,30 +247,49 @@ export const ObservationCapture = forwardRef<ObservationCaptureHandle, { store: 
       setError(t("capture.micPermission"));
       return;
     }
-    await setAudioModeAsync({ playsInSilentMode: true } as Record<string, unknown>);
-    await recorder.prepareToRecordAsync();
-    recorder.record();
-    setRecording(true);
+    try {
+      // iOS records nothing unless the session allows it; harmless on Android.
+      await setAudioModeAsync({ allowsRecording: true, playsInSilentMode: true });
+      await recorder.prepareToRecordAsync(DICTATION_RECORDING);
+      recorder.record();
+      recordStartRef.current = Date.now();
+      setError(null);
+      setRecording(true);
+    } catch (e) {
+      setError(t("capture.micError"));
+    }
   }
 
   async function pickImage() {
     if (loading || transcribing || analyzingImage || recording) return;
+    // The VLM download/load starts now and overlaps with the user browsing the
+    // gallery; progress is shared with the extraction that follows.
+    void store.warmVision();
     const res = await ImagePicker.launchImageLibraryAsync({
       mediaTypes: ["images"],
-      quality: 0.7,
+      quality: 0.9,
       allowsEditing: false,
+      allowsMultipleSelection: false,
+      exif: false,
+      base64: false,
     });
     if (res.canceled || !res.assets?.[0]?.uri) return;
-    await runImageExtraction(res.assets[0].uri);
+    const asset = res.assets[0];
+    await runImageExtraction(asset.uri, { width: asset.width, height: asset.height });
   }
 
-  async function runImageExtraction(uri: string) {
+  async function runImageExtraction(uri: string, size?: { width?: number; height?: number }) {
     setAnalyzingImage(true);
+    setMediaStage({ kind: "image-prepare" });
     setError(null);
     setResult(null);
     setQuestionSkipped(false);
     try {
-      const res = await store.extractImage(uri);
+      const res = await store.extractImage(uri, size, (p) => {
+        if (p.stage === "prepare") setMediaStage({ kind: "image-prepare" });
+        else if (p.stage === "load") setMediaStage({ kind: "vision-load", pct: p.pct });
+        else setMediaStage(null);
+      });
       setResult(res);
       setDraft(JSON.parse(JSON.stringify(res.draft)));
       const dev = getDevice()?.toUpperCase() ?? "?";
@@ -206,9 +297,10 @@ export const ObservationCapture = forwardRef<ObservationCaptureHandle, { store: 
       if (res.question) items.push(msg("assistant", res.question));
       push(...items);
     } catch (e) {
-      setError(t("capture.imageError"));
+      setError(mediaErrorMessage(e, "capture.imageError"));
     } finally {
       setAnalyzingImage(false);
+      setMediaStage(null);
     }
   }
 
@@ -309,7 +401,16 @@ export const ObservationCapture = forwardRef<ObservationCaptureHandle, { store: 
         {(transcribing || analyzingImage) && (
           <View style={[styles.bubble, styles.assistant, styles.loadingRow]}>
             <ActivityIndicator color={theme.color.textSecondary} />
-            <Text style={theme.type.body}>{transcribing ? t("capture.transcribing") : t("capture.analyzingImage")}</Text>
+            <View style={{ flex: 1, gap: 2 }}>
+              <Text style={theme.type.body}>
+                {mediaStage?.kind === "voice-load" ? t("capture.loadingVoiceModel", { n: Math.round(mediaStage.pct) })
+                  : mediaStage?.kind === "image-prepare" ? t("capture.preparingImage")
+                  : mediaStage?.kind === "vision-load" ? t("capture.loadingVisionModel", { n: Math.round(mediaStage.pct) })
+                  : transcribing ? t("capture.transcribing")
+                  : t("capture.analyzingImage")}
+              </Text>
+              {elapsedSec > 0 && <Text style={theme.type.caption}>{t("capture.elapsed", { n: elapsedSec })}</Text>}
+            </View>
           </View>
         )}
 
