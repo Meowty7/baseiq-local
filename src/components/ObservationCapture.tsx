@@ -8,28 +8,61 @@ import { Button, Card, Input, Select } from "../ui/primitives";
 import { radius, space, useTheme, type Theme } from "../ui/theme";
 import { modalityLabels, statusLabels, useI18n } from "../i18n";
 import * as ImagePicker from "expo-image-picker";
+import { DICTATION_BIT_RATE, DICTATION_SAMPLE_RATE } from "../lib/media";
+
+type Recorder = {
+  uri: string | null;
+  record: (o?: unknown) => void;
+  stop: () => Promise<void>;
+  prepareToRecordAsync: (opts?: unknown) => Promise<void>;
+  getStatus?: () => { durationMillis?: number };
+};
 
 // Lazy: expo-audio native module may not be compiled into the dev client yet.
 // Importing at top level crashes the app on launch if the .so is missing.
-let useAudioRecorder: (opts: unknown, cb?: (s: unknown) => void) => { uri: string | null; record: (o?: unknown) => void; stop: () => Promise<void>; prepareToRecordAsync: () => Promise<void> } | null = null;
+let useAudioRecorder: ((opts: unknown, cb?: (s: unknown) => void) => Recorder) | null = null;
 let requestRecordingPermissionsAsync: (() => Promise<{ granted: boolean }>) | null = null;
 let setAudioModeAsync: ((m: unknown) => Promise<void>) | null = null;
-let RecordingPresets: { HIGH_QUALITY: unknown } | null = null;
+/** 16 kHz mono AAC — built after the lazy import so iOS enums stay off the launch path. */
+let dictationRecording: unknown = null;
 let audioImportFailed = false;
 async function ensureAudio() {
-  if (useAudioRecorder || audioImportFailed) return;
+  if ((useAudioRecorder && dictationRecording) || audioImportFailed) return;
   try {
     const mod = await import("expo-audio");
-    useAudioRecorder = mod.useAudioRecorder;
+    useAudioRecorder = mod.useAudioRecorder as typeof useAudioRecorder;
     requestRecordingPermissionsAsync = mod.requestRecordingPermissionsAsync;
     setAudioModeAsync = mod.setAudioModeAsync;
-    RecordingPresets = mod.RecordingPresets;
+    dictationRecording = {
+      extension: ".m4a",
+      sampleRate: DICTATION_SAMPLE_RATE,
+      numberOfChannels: 1,
+      bitRate: DICTATION_BIT_RATE,
+      android: { outputFormat: "mpeg4", audioEncoder: "aac" },
+      ios: {
+        outputFormat: mod.IOSOutputFormat.MPEG4AAC,
+        audioQuality: mod.AudioQuality.MEDIUM,
+        linearPCMBitDepth: 16,
+        linearPCMIsBigEndian: false,
+        linearPCMIsFloat: false,
+      },
+      web: { mimeType: "audio/webm", bitsPerSecond: DICTATION_BIT_RATE },
+    };
   } catch {
     audioImportFailed = true;
   }
 }
 
 type Store = ReturnType<typeof useStore>;
+
+/** Below this, Whisper only ever returns silence markers; skip the model run. */
+const MIN_DICTATION_MS = 700;
+
+type MediaStage =
+  | { kind: "voice-load"; pct: number }
+  | { kind: "image-prepare" }
+  | { kind: "vision-load"; pct: number }
+  | null;
 
 const EXAMPLES = [
   "Estoy en Hospital DemoCare Pacific, en Panamá. Vi dos resonadores y un tomógrafo. Uno de los resonadores parece de unos ocho años.",
@@ -81,12 +114,15 @@ export const ObservationCapture = forwardRef<ObservationCaptureHandle, { store: 
   const [recording, setRecording] = useState(false);
   const [transcribing, setTranscribing] = useState(false);
   const [analyzingImage, setAnalyzingImage] = useState(false);
+  /** What the busy bubble should say while dictation/photo work runs. */
+  const [mediaStage, setMediaStage] = useState<MediaStage>(null);
   const transcriptRef = useRef("");
   const scrollRef = useRef<ScrollView>(null);
   const [elapsedSec, setElapsedSec] = useState(0);
   const [live, setLive] = useState<InferSnapshot | null>(null);
   const [androidKeyboardHeight, setAndroidKeyboardHeight] = useState(0);
-  const recorderRef = useRef<{ uri: string | null; record: (o?: unknown) => void; stop: () => Promise<void>; prepareToRecordAsync: () => Promise<void> } | null>(null);
+  const recorderRef = useRef<Recorder | null>(null);
+  const recordStartRef = useRef(0);
 
   useEffect(() => {
     onBusyChange?.(loading || saving || transcribing || analyzingImage);
@@ -116,8 +152,9 @@ export const ObservationCapture = forwardRef<ObservationCaptureHandle, { store: 
     };
   }, [tabBarHeight]);
 
+  const working = loading || transcribing || analyzingImage;
   useEffect(() => {
-    if (!loading && !analyzingImage) {
+    if (!working) {
       setElapsedSec(0);
       return;
     }
@@ -136,7 +173,7 @@ export const ObservationCapture = forwardRef<ObservationCaptureHandle, { store: 
       });
     }, 200);
     return () => clearInterval(id);
-  }, [loading, analyzingImage]);
+  }, [working]);
 
   const push = (...items: Msg[]) => setMessages((prev) => [...prev, ...items]);
   const awaitingAnswer = !!result?.question && !questionSkipped;
@@ -187,26 +224,56 @@ export const ObservationCapture = forwardRef<ObservationCaptureHandle, { store: 
     }
   }
 
+  function mediaErrorMessage(e: unknown, fallbackKey: string): string {
+    const code = e instanceof Error ? e.message : "";
+    if (code === "load_timeout") return t("capture.loadTimeout");
+    if (code === "infer_timeout" || code === "transcribe_timeout") return t("capture.timeout");
+    if (code === "model_busy") return t("capture.busy");
+    return t(fallbackKey);
+  }
+
+  function recordedDurationMs(): number {
+    let ms = 0;
+    try {
+      ms = recorderRef.current?.getStatus?.().durationMillis ?? 0;
+    } catch {
+      /* recorder already released */
+    }
+    if (!ms && recordStartRef.current) ms = Date.now() - recordStartRef.current;
+    return ms;
+  }
+
   async function toggleMic() {
     if (transcribing || analyzingImage) return;
     if (recording && recorderRef.current) {
+      const durationMs = recordedDurationMs();
       await recorderRef.current.stop();
       setRecording(false);
       const uri = recorderRef.current.uri;
       if (!uri) return;
+      if (durationMs > 0 && durationMs < MIN_DICTATION_MS) {
+        setError(t("capture.recordingTooShort"));
+        return;
+      }
+      setError(null);
       setTranscribing(true);
+      setMediaStage(null);
       try {
-        const transcript = await store.transcribe(uri);
+        const transcript = await store.transcribe(uri, {
+          durationMs,
+          onLoadProgress: (pct) => setMediaStage(pct >= 100 ? null : { kind: "voice-load", pct }),
+        });
         if (transcript.trim()) setText((prev) => (prev.trim() ? `${prev} ` : "") + transcript.trim());
-      } catch {
-        setError(t("capture.micError"));
+      } catch (e) {
+        setError(mediaErrorMessage(e, "capture.micError"));
       } finally {
         setTranscribing(false);
+        setMediaStage(null);
       }
       return;
     }
     await ensureAudio();
-    if (!useAudioRecorder || !requestRecordingPermissionsAsync || !setAudioModeAsync || !RecordingPresets) {
+    if (!useAudioRecorder || !requestRecordingPermissionsAsync || !setAudioModeAsync || !dictationRecording) {
       setError(t("capture.micError"));
       return;
     }
@@ -215,33 +282,57 @@ export const ObservationCapture = forwardRef<ObservationCaptureHandle, { store: 
       setError(t("capture.micPermission"));
       return;
     }
-    await setAudioModeAsync({ playsInSilentMode: true } as Record<string, unknown>);
-    recorderRef.current = useAudioRecorder(RecordingPresets.HIGH_QUALITY, () => {});
-    if (!recorderRef.current) return;
-    await recorderRef.current.prepareToRecordAsync();
-    recorderRef.current.record();
-    setRecording(true);
+    try {
+      // iOS records nothing unless the session allows it; harmless on Android.
+      await setAudioModeAsync({ allowsRecording: true, playsInSilentMode: true });
+      recorderRef.current = useAudioRecorder(dictationRecording, () => {});
+      if (!recorderRef.current) return;
+      await recorderRef.current.prepareToRecordAsync(dictationRecording);
+      recorderRef.current.record();
+      recordStartRef.current = Date.now();
+      setError(null);
+      setRecording(true);
+    } catch {
+      setError(t("capture.micError"));
+    }
   }
 
   async function pickImage() {
     if (loading || transcribing || analyzingImage || recording) return;
+    // The VLM download/load starts now and overlaps with the user browsing the
+    // gallery; progress is shared with the extraction that follows.
+    void store.warmVision();
     const res = await ImagePicker.launchImageLibraryAsync({
       mediaTypes: ["images"],
-      quality: 0.7,
+      quality: 0.9,
       allowsEditing: false,
+      allowsMultipleSelection: false,
+      exif: false,
+      base64: false,
     });
     if (res.canceled || !res.assets?.[0]?.uri) return;
-    await runImageExtraction(res.assets[0].uri);
+    const asset = res.assets[0];
+    await runImageExtraction(asset.uri, { width: asset.width, height: asset.height });
   }
 
-  async function runImageExtraction(uri: string) {
+  async function runImageExtraction(uri: string, size?: { width?: number; height?: number }) {
     setAnalyzingImage(true);
+    setMediaStage({ kind: "image-prepare" });
     setError(null);
     setResult(null);
     setQuestionSkipped(false);
     setLive({ phase: "decoding", inferMs: 0 });
     try {
-      const res = await store.extractImage(uri, setLive);
+      const res = await store.extractImage(
+        uri,
+        size,
+        (p) => {
+          if (p.stage === "prepare") setMediaStage({ kind: "image-prepare" });
+          else if (p.stage === "load") setMediaStage({ kind: "vision-load", pct: p.pct });
+          else setMediaStage(null);
+        },
+        setLive,
+      );
       setResult(res);
       setDraft(JSON.parse(JSON.stringify(res.draft)));
       const dev = getDevice()?.toUpperCase() ?? "?";
@@ -250,9 +341,10 @@ export const ObservationCapture = forwardRef<ObservationCaptureHandle, { store: 
       if (res.question) items.push(msg("assistant", res.question));
       push(...items);
     } catch (e) {
-      setError(t("capture.imageError"));
+      setError(mediaErrorMessage(e, "capture.imageError"));
     } finally {
       setAnalyzingImage(false);
+      setMediaStage(null);
       setLive(null);
     }
   }
@@ -344,7 +436,12 @@ export const ObservationCapture = forwardRef<ObservationCaptureHandle, { store: 
               <ActivityIndicator color={theme.color.textSecondary} />
               <View style={{ flex: 1, gap: 2 }}>
                 <Text style={theme.type.body}>
-                  {analyzingImage ? t("capture.analyzingImage") : live?.phase === "translating" ? t("capture.translating") : t("capture.extracting")}
+                  {analyzingImage
+                    ? mediaStage?.kind === "image-prepare" ? t("capture.preparingImage")
+                      : mediaStage?.kind === "vision-load" ? t("capture.loadingVisionModel", { n: Math.round(mediaStage.pct) })
+                      : t("capture.analyzingImage")
+                    : live?.phase === "translating" ? t("capture.translating")
+                    : t("capture.extracting")}
                 </Text>
                 <Text style={theme.type.caption}>
                   {elapsedSec > 0 ? t("capture.elapsed", { n: elapsedSec }) : t("capture.starting")}
@@ -352,14 +449,21 @@ export const ObservationCapture = forwardRef<ObservationCaptureHandle, { store: 
                 </Text>
               </View>
             </View>
-            <MetricsHud live={live} />
+            {(!analyzingImage || !mediaStage) && <MetricsHud live={live} />}
           </View>
         )}
 
         {transcribing && (
           <View style={[styles.bubble, styles.assistant, styles.loadingRow]}>
             <ActivityIndicator color={theme.color.textSecondary} />
-            <Text style={theme.type.body}>{t("capture.transcribing")}</Text>
+            <View style={{ flex: 1, gap: 2 }}>
+              <Text style={theme.type.body}>
+                {mediaStage?.kind === "voice-load"
+                  ? t("capture.loadingVoiceModel", { n: Math.round(mediaStage.pct) })
+                  : t("capture.transcribing")}
+              </Text>
+              {elapsedSec > 0 && <Text style={theme.type.caption}>{t("capture.elapsed", { n: elapsedSec })}</Text>}
+            </View>
           </View>
         )}
 

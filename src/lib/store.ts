@@ -4,8 +4,12 @@ import {
   getDb, listObservations, saveObservation,
   updateObservation, updateObservationClient, updateEquipment, deleteObservation,
 } from "./db";
-import { ensureModel, isReady, isBusy, getLastInferMs, getDevice, setDeviceOverride, MODEL_NAME, releaseUnusedTranslators, transcribeAudio, type InferSnapshot } from "./qvac";
+import {
+  ensureModel, ensureWhisper, ensureVisionModel, isReady, isBusy, getLastInferMs, getDevice, setDeviceOverride,
+  MODEL_NAME, releaseUnusedTranslators, transcribeAudio, type InferSnapshot, type TranscribeOptions,
+} from "./qvac";
 import { extractObservation, extractObservationFromImage } from "./extraction";
+import { discardTempFile, prepareImageForVision, type Size } from "./media";
 import { isLang, localizeUi, type Lang } from "../i18n";
 import {
   OBSERVATION_STATUSES, SOURCE_TYPES, freshness, detectConflicts, normalizeDraft,
@@ -15,6 +19,19 @@ import fixtures from "../../fixtures/observations.es.json";
 
 function documentDir(): string {
   return FileSystem.documentDirectory ?? "";
+}
+
+/**
+ * Dictation is Spanish-only (WHISPER_SPANISH_TINY). Loading the ~80 MB model
+ * right after the LLM means the first mic tap transcribes instead of sitting
+ * on a download. Runs under the shared native lock, so it never overlaps the
+ * GPU llama load; failures are logged and retried on first use.
+ */
+function warmWhisper(lang: Lang): void {
+  if (lang !== "es") return;
+  void ensureWhisper().catch((err) => {
+    console.warn("▸ whisper warm-up failed:", err instanceof Error ? err.message : err);
+  });
 }
 
 export interface OverviewResult {
@@ -35,6 +52,12 @@ export interface StatusResult {
   device: "gpu" | "cpu" | null;
   lastInferMs: number | null;
 }
+
+/** Phases of a photo extraction, in order: downscale → (first-run VLM download) → inference. */
+export type ImageProgress =
+  | { stage: "prepare" }
+  | { stage: "load"; pct: number }
+  | { stage: "infer" };
 
 export interface ExtractionResult {
   draft: ObservationDraft;
@@ -131,6 +154,7 @@ export function useStore() {
         setUiLocalizing(false);
         setUiLocalizeProgress(null);
         refresh();
+        warmWhisper(initial);
       } catch (err) {
         console.error("model preload failed:", err);
         setUiLocalizing(false);
@@ -157,6 +181,7 @@ export function useStore() {
       // L→EN loads on first extract; preloading it here stacked Bergamot models
       // on Android (no unload) and timed out IT→EN while DE was still loading.
       await releaseUnusedTranslators(next).catch(() => {});
+      warmWhisper(next);
     })();
   }, []);
 
@@ -165,13 +190,42 @@ export function useStore() {
     return { draft, question, inferMs, stats, sourceText: text.trim() };
   }, [lang]);
 
-  const transcribe = useCallback(async (audioPath: string): Promise<string> => {
-    return transcribeAudio(audioPath);
+  const transcribe = useCallback(async (audioUri: string, opts: TranscribeOptions = {}): Promise<string> => {
+    try {
+      return await transcribeAudio(audioUri, opts);
+    } finally {
+      // Each dictation is a fresh .m4a in the cache dir; nothing reads it again.
+      void discardTempFile(audioUri);
+    }
   }, []);
 
-  const extractImage = useCallback(async (uri: string, onProgress?: (snap: InferSnapshot) => void): Promise<ExtractionResult> => {
-    const { draft, question, inferMs, stats } = await extractObservationFromImage(uri, lang, onProgress);
-    return { draft, question, inferMs, stats, sourceText: "(imagen)" };
+  /** Start downloading/loading the VLM while the user is still picking a photo. */
+  const warmVision = useCallback((onProgress?: (pct: number) => void): Promise<void> => {
+    return ensureVisionModel(onProgress).then(() => undefined, (err) => {
+      console.warn("▸ vision warm-up failed:", err instanceof Error ? err.message : err);
+    });
+  }, []);
+
+  const extractImage = useCallback(async (
+    uri: string,
+    size?: Partial<Size> | null,
+    onProgress?: (p: ImageProgress) => void,
+    onInfer?: (snap: InferSnapshot) => void,
+  ): Promise<ExtractionResult> => {
+    onProgress?.({ stage: "prepare" });
+    const prepared = await prepareImageForVision(uri, size);
+    onProgress?.({ stage: "infer" });
+    try {
+      const { draft, question, inferMs, stats } = await extractObservationFromImage(
+        prepared.uri,
+        lang,
+        onInfer,
+        (pct) => onProgress?.(pct >= 100 ? { stage: "infer" } : { stage: "load", pct }),
+      );
+      return { draft, question, inferMs, stats, sourceText: "(imagen)" };
+    } finally {
+      if (prepared.temp) void discardTempFile(prepared.uri);
+    }
   }, [lang]);
 
   const save = useCallback((input: {
@@ -221,5 +275,5 @@ export function useStore() {
     refresh();
   }, [refresh]);
 
-  return { status, observations, overview, progress, lang, setLang, uiLocalizing, uiLocalizeProgress, refresh, extract, transcribe, extractImage, save, update, remove };
+  return { status, observations, overview, progress, lang, setLang, uiLocalizing, uiLocalizeProgress, refresh, extract, transcribe, warmVision, extractImage, save, update, remove };
 }

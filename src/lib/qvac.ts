@@ -101,7 +101,11 @@ type QvacState = {
   whisperLoading: Promise<string> | null;
   visionId: string | null;
   visionLoading: Promise<string> | null;
+  auxProgress: Record<AuxModel, Set<(pct: number) => void>>;
 };
+
+/** Models loaded on demand next to the LLM; their download progress is broadcast. */
+export type AuxModel = "whisper" | "vision";
 
 // ponytail: Fast Refresh (bun run start) reinicia este módulo y modelId queda null,
 // pero en Android el worker GPU sigue vivo (QVAC-19304). Recargar el modelo encima
@@ -129,6 +133,7 @@ const st = g.__baseiqQvac ?? (g.__baseiqQvac = {
   whisperLoading: null,
   visionId: null,
   visionLoading: null,
+  auxProgress: { whisper: new Set(), vision: new Set() },
 });
 st.translators ??= {};
 st.translatorLoading ??= {};
@@ -142,12 +147,34 @@ st.whisperId ??= null;
 st.whisperLoading ??= null;
 st.visionId ??= null;
 st.visionLoading ??= null;
+st.auxProgress ??= { whisper: new Set(), vision: new Set() };
 if (!st.nativeUnified) {
   // LLM + NMT share one Bare worker. Overlapping loadModel/completion on Adreno
   // never returns (same failure mode as reloading the LLM on HMR).
   st.tail = Promise.all([st.tail, st.translatorTail]).then(() => {});
   st.translatorTail = st.tail;
   st.nativeUnified = true;
+}
+
+/**
+ * Subscribe to download/load progress of an auxiliary model. A warm-up started
+ * elsewhere (e.g. when the camera button is tapped) and the call that later
+ * needs the model both see the same ticks, so the UI can show a percentage
+ * even when it was not the one to start the load.
+ */
+export function onAuxProgress(kind: AuxModel, fn: (pct: number) => void): () => void {
+  st.auxProgress[kind].add(fn);
+  return () => { st.auxProgress[kind].delete(fn); };
+}
+
+function emitAuxProgress(kind: AuxModel, pct: number): void {
+  for (const fn of st.auxProgress[kind]) {
+    try {
+      fn(pct);
+    } catch {
+      /* listener errors must not break the load */
+    }
+  }
 }
 
 function withNativeLock<T>(fn: () => Promise<T>): Promise<T> {
@@ -225,12 +252,19 @@ function modelConfig(d: InferDevice) {
   return d === "gpu" ? { device: "gpu", gpu_layers: 99 } : { device: "cpu", gpu_layers: 0 };
 }
 
+const LOAD_STALL_MS = 120000;
+
 async function loadOn(d: InferDevice, onProgress?: (pct: number) => void): Promise<string> {
-  return loadModel({
-    modelSrc: selected.src,
-    modelConfig: modelConfig(d),
-    onProgress: (p: { percentage: number }) => onProgress?.(p.percentage),
-  } as unknown as Parameters<typeof loadModel>[0]);
+  return withStallTimeout(
+    (report) => loadModel({
+      modelSrc: selected.src,
+      modelConfig: modelConfig(d),
+      onProgress: (p: { percentage: number }) => report(p.percentage),
+    } as unknown as Parameters<typeof loadModel>[0]),
+    LOAD_STALL_MS,
+    "load_timeout",
+    onProgress,
+  );
 }
 
 function withTimeout<T>(p: Promise<T>, ms: number, code: string): Promise<T> {
@@ -240,12 +274,78 @@ function withTimeout<T>(p: Promise<T>, ms: number, code: string): Promise<T> {
   ]);
 }
 
+/**
+ * Timeout that only fires after `stallMs` without a progress tick. A fixed
+ * budget rejected slow first downloads (hundreds of MB on mobile data) while
+ * the fetch kept going in the background; here progress keeps the load alive
+ * and only a real stall (no bytes, no native load completion) fails it.
+ */
+export function withStallTimeout<T>(
+  start: (report: (pct: number) => void) => Promise<T>,
+  stallMs: number,
+  code: string,
+  onProgress?: (pct: number) => void,
+): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    let settled = false;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const arm = () => {
+      if (timer) clearTimeout(timer);
+      timer = setTimeout(() => {
+        if (settled) return;
+        settled = true;
+        reject(new Error(code));
+      }, stallMs);
+    };
+    const finish = (fn: () => void) => {
+      if (settled) return;
+      settled = true;
+      if (timer) clearTimeout(timer);
+      fn();
+    };
+    arm();
+    let last = -1;
+    start((pct) => {
+      if (settled) return;
+      if (pct > last) {
+        last = pct;
+        arm();
+      }
+      onProgress?.(pct);
+    }).then(
+      (value) => finish(() => resolve(value)),
+      (err) => finish(() => reject(err)),
+    );
+  });
+}
+
+/**
+ * Expo hands out `file://` URIs (recorder, image picker, manipulator). The Bare
+ * worker resolves attachments and audio with plain `fs` calls, so a URI fails
+ * `existsSync` and surfaces as "attachment/audio not found" after the model
+ * has already been loaded. Strip the scheme and percent-decoding here.
+ */
+export function toNativePath(uri: string): string {
+  let out = uri.trim();
+  if (/^file:\/\//i.test(out)) {
+    out = out.replace(/^file:\/\/(localhost)?/i, "");
+    // Windows drive URIs (`file:///C:/x`) keep their leading slash stripped.
+    if (/^\/[A-Za-z]:\//.test(out)) out = out.slice(1);
+    try {
+      out = decodeURIComponent(out);
+    } catch {
+      /* keep the raw path if it has stray % */
+    }
+  }
+  return out;
+}
+
 async function loadLlmLocked(onProgress?: (pct: number) => void): Promise<string> {
   if (st.modelId) return st.modelId;
   const preferred = preferredDevice();
   const run = async () => {
     try {
-      const id = await withTimeout(loadOn(preferred, onProgress), 120000, "load_timeout");
+      const id = await loadOn(preferred, onProgress);
       st.device = preferred;
       console.log(`▸ QVAC device=${st.device} model=${selected.name}`);
       return id;
@@ -253,7 +353,7 @@ async function loadLlmLocked(onProgress?: (pct: number) => void): Promise<string
       if (preferred === "cpu") throw err;
       st.gpuFailed = true;
       console.warn(`▸ QVAC GPU load failed, falling back to CPU:`, err instanceof Error ? err.message : err);
-      const id = await withTimeout(loadOn("cpu", onProgress), 120000, "load_timeout");
+      const id = await loadOn("cpu", onProgress);
       st.device = "cpu";
       console.log(`▸ QVAC device=${st.device} model=${selected.name}`);
       return id;
@@ -281,15 +381,16 @@ async function loadTranslatorLocked(from: string, to: string, onProgress?: (pct:
   const src = BERGAMOT_PAIRS[key] ?? bergamotModel(from, to);
   if (!src) throw new Error(`no_bergamot_pair:${key}`);
   const run = (async () => {
-    const id = await withTimeout(
-      loadModel({
+    const id = await withStallTimeout(
+      (report) => loadModel({
         modelSrc: src,
         modelType: "nmt",
         modelConfig: { engine: "Bergamot", from, to },
-        onProgress: (p: { percentage: number }) => onProgress?.(p.percentage),
+        onProgress: (p: { percentage: number }) => report(p.percentage),
       } as unknown as Parameters<typeof loadModel>[0]),
-      180000,
+      LOAD_STALL_MS,
       "load_timeout",
+      onProgress,
     );
     console.log(`▸ QVAC translator=${translatorName(from, to)} device=cpu`);
     return id;
@@ -551,42 +652,88 @@ export async function inferJson(
   });
 }
 
+// Domain vocabulary biases the tiny decoder towards the words field notes
+// actually contain. Set once at load: passing `prompt` per call makes the SDK
+// reload the native context twice per transcription (apply + restore).
+const WHISPER_INITIAL_PROMPT =
+  "Visita a hospital o clínica. Resonador, tomógrafo, ecógrafo, rayos X, mamógrafo. Philips, Siemens, GE. Años de antigüedad.";
+
+const WHISPER_CONFIG: Record<string, unknown> = {
+  language: "es",
+  audio_format: "s16le",
+  initial_prompt: WHISPER_INITIAL_PROMPT,
+  no_timestamps: true,
+  suppress_blank: true,
+  suppress_nst: true,
+  temperature: 0,
+};
+
 async function loadWhisperLocked(): Promise<string> {
   if (st.whisperId) return st.whisperId;
-  const id = await withTimeout(
-    loadModel({
+  const id = await withStallTimeout(
+    (report) => loadModel({
       modelSrc: WHISPER_SPANISH_TINY_Q8_0,
       modelType: "whispercpp-transcription",
-      modelConfig: { language: "es", audio_format: "s16le" } as Record<string, unknown>,
+      modelConfig: WHISPER_CONFIG,
+      onProgress: (p: { percentage: number }) => report(p.percentage),
     } as unknown as Parameters<typeof loadModel>[0]),
-    120000,
+    LOAD_STALL_MS,
     "load_timeout",
+    (pct) => emitAuxProgress("whisper", pct),
   );
   console.log("▸ QVAC whisper=WHISPER_SPANISH_TINY_Q8_0 device=cpu");
   st.whisperId = id;
+  emitAuxProgress("whisper", 100);
   return id;
 }
 
-export function ensureWhisper(): Promise<string> {
+export function ensureWhisper(onProgress?: (pct: number) => void): Promise<string> {
   if (st.whisperId) return Promise.resolve(st.whisperId);
+  const off = onProgress ? onAuxProgress("whisper", onProgress) : null;
   if (!st.whisperLoading) {
     st.whisperLoading = withNativeLock(() => loadWhisperLocked())
       .then((id) => { st.whisperLoading = null; return id; })
       .catch((err) => { st.whisperLoading = null; throw err; });
   }
-  return st.whisperLoading;
+  return st.whisperLoading.finally(() => off?.());
 }
 
-export async function transcribeAudio(path: string, timeoutMs = 30000): Promise<string> {
+export interface TranscribeOptions {
+  /** Length of the recording; the timeout scales with it so long dictations are not cut off. */
+  durationMs?: number;
+  timeoutMs?: number;
+  /** Download/load progress of the Whisper model when it is not resident yet. */
+  onLoadProgress?: (pct: number) => void;
+}
+
+export function transcribeTimeoutMs(durationMs?: number): number {
+  // tiny-q8 on a phone CPU runs well under 1× real time; 3× plus a floor
+  // covers FFmpeg decode of the .m4a and a slow first run.
+  const base = 20000;
+  if (!durationMs || !Number.isFinite(durationMs) || durationMs <= 0) return 45000;
+  return Math.min(180000, Math.max(30000, base + durationMs * 3));
+}
+
+export async function transcribeAudio(uri: string, opts: TranscribeOptions = {}): Promise<string> {
+  const path = toNativePath(uri);
+  const timeoutMs = opts.timeoutMs ?? transcribeTimeoutMs(opts.durationMs);
+  const off = opts.onLoadProgress ? onAuxProgress("whisper", opts.onLoadProgress) : null;
   return withNativeLock(async () => {
-    const id = await loadWhisperLocked();
+    let id: string;
+    try {
+      id = await loadWhisperLocked();
+    } finally {
+      off?.();
+    }
     st.inflight += 1;
+    const t0 = Date.now();
     try {
       const text = await withTimeout(
-        transcribe({ modelId: id, audioChunk: path, prompt: "es" } as Parameters<typeof transcribe>[0]),
+        transcribe({ modelId: id, audioChunk: path } as Parameters<typeof transcribe>[0]),
         timeoutMs,
         "transcribe_timeout",
       );
+      console.log(`▸ QVAC transcribe ${Date.now() - t0}ms (audio ${opts.durationMs ?? "?"}ms)`);
       return typeof text === "string" ? text.trim() : "";
     } finally {
       st.inflight = Math.max(0, st.inflight - 1);
@@ -600,44 +747,60 @@ async function loadVisionLocked(): Promise<string> {
   const cfg = preferred === "gpu"
     ? { device: "gpu", gpu_layers: 99, "mmproj-use-gpu": false }
     : { device: "cpu", gpu_layers: 0, "mmproj-use-gpu": false };
-  const id = await withTimeout(
-    loadModel({
+  // GGUF + mmproj together are several hundred MB; the model then has to be
+  // mapped onto the GPU. Both phases are slow on a phone, so the stall window
+  // is wider than for the text LLM.
+  const id = await withStallTimeout(
+    (report) => loadModel({
       modelSrc: MODELS.qwen35.src,
       modelType: "llamacpp-completion",
       projectionModelSrc: MMPROJ_QWEN3_5_0_8B_MULTIMODAL_Q8_0,
       modelConfig: cfg,
+      onProgress: (p: { percentage: number }) => report(p.percentage),
     } as unknown as Parameters<typeof loadModel>[0]),
     180000,
     "load_timeout",
+    (pct) => emitAuxProgress("vision", pct),
   );
   console.log(`▸ QVAC vision=QWEN3_5_0_8B_MULTIMODAL_Q4_K_M device=${preferred}`);
   st.visionId = id;
+  emitAuxProgress("vision", 100);
   return id;
 }
 
-export function ensureVisionModel(): Promise<string> {
+export function ensureVisionModel(onProgress?: (pct: number) => void): Promise<string> {
   if (st.visionId) return Promise.resolve(st.visionId);
+  const off = onProgress ? onAuxProgress("vision", onProgress) : null;
   if (!st.visionLoading) {
     st.visionLoading = withNativeLock(() => loadVisionLocked())
       .then((id) => { st.visionLoading = null; return id; })
       .catch((err) => { st.visionLoading = null; throw err; });
   }
-  return st.visionLoading;
+  return st.visionLoading.finally(() => off?.());
 }
 
 export async function inferJsonWithImage(
   system: string,
   user: string,
-  imagePath: string,
+  imageUri: string,
   schema: object,
-  timeoutMs = 60000,
+  timeoutMs = 120000,
   onProgress?: (snap: InferSnapshot) => void,
+  onLoadProgress?: (pct: number) => void,
 ): Promise<{ text: string; inferMs: number; stats: InferSnapshot }> {
+  const imagePath = toNativePath(imageUri);
+  const off = onLoadProgress ? onAuxProgress("vision", onLoadProgress) : null;
   return withNativeLock(async () => {
     st.inflight += 1;
-    const t0 = Date.now();
     try {
-      const id = await loadVisionLocked();
+      let id: string;
+      try {
+        id = await loadVisionLocked();
+      } finally {
+        off?.();
+      }
+      // Measured from prompt submission: a first-run download is not "inference".
+      const t0 = Date.now();
       const result = await runStructuredCompletion(id, system, user, schema, timeoutMs, onProgress, t0, imagePath);
       const inferMs = Date.now() - t0;
       const stats = finishInfer(result.snap, result.final, inferMs, onProgress);

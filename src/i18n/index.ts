@@ -129,6 +129,40 @@ function applyOverlay(lang: string, strings: Record<string, string>, questions: 
   setQuestionOverlay(lang, questions);
 }
 
+/** Keys present in the EN source but absent from a cached overlay. */
+export function missingOverlayKeys(
+  cached: { strings: Record<string, string>; questions: Record<string, string> },
+): { strings: StringKey[]; questions: string[] } {
+  return {
+    strings: (Object.keys(STRINGS.en) as StringKey[]).filter((k) => !cached.strings[k]),
+    questions: Object.keys(QUESTIONS.en).filter((k) => !cached.questions[k]),
+  };
+}
+
+async function fillMissing(
+  lang: string,
+  cached: { strings: Record<string, string>; questions: Record<string, string> },
+  onProgress?: (pct: number) => void,
+): Promise<void> {
+  const missing = missingOverlayKeys(cached);
+  if (missing.strings.length === 0 && missing.questions.length === 0) return;
+  const protectedStrings = missing.strings.map((k) => protect(STRINGS.en[k]));
+  const texts = [...protectedStrings.map((p) => p.text), ...missing.questions.map((k) => QUESTIONS.en[k])];
+  const batch = await translateBatch("en", lang, texts, 60000, onProgress);
+  if (!batch || batch.translations.length !== texts.length) {
+    console.warn(`▸ i18n fillMissing failed for ${lang} (${texts.length} strings)`);
+    return;
+  }
+  const strings = { ...cached.strings };
+  missing.strings.forEach((k, i) => { strings[k] = unprotect(batch.translations[i], protectedStrings[i].slots); });
+  const questions = { ...cached.questions };
+  missing.questions.forEach((k, i) => { questions[k] = batch.translations[protectedStrings.length + i]; });
+  applyOverlay(lang, strings, questions);
+  await writeCache(lang, { strings, questions });
+  notify();
+  await unloadTranslator("en", lang);
+}
+
 /** Translate EN UI + questions into L via TranslatePsy, cache on disk. ES/EN are handwritten. */
 export async function localizeUi(lang: string, onProgress?: (pct: number) => void): Promise<void> {
   if (!isLang(lang) || lang === "es" || lang === "en") {
@@ -143,6 +177,9 @@ export async function localizeUi(lang: string, onProgress?: (pct: number) => voi
   if (cached) {
     applyOverlay(lang, cached.strings, cached.questions);
     notify();
+    // Strings added after the cache was written fall back to EN until now;
+    // translate just the gap instead of re-running the whole ~100-string batch.
+    await fillMissing(lang, cached, onProgress);
     onProgress?.(100);
     return;
   }
