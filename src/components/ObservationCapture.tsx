@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from "react";
 import { getDevice } from "../lib/qvac";
 import { ActivityIndicator, Keyboard, KeyboardAvoidingView, Platform, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import { appendFollowUp, MODALITIES, type Modality, type ObservationDraft } from "../../shared/observation";
@@ -27,7 +27,13 @@ interface Msg {
 const msgId = () => `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
 const msg = (role: Msg["role"], text: string, caption?: string): Msg => ({ id: msgId(), role, text, caption });
 
-export function ObservationCapture({ store, onBusyChange }: { store: Store; onBusyChange?: (busy: boolean) => void }) {
+export interface ObservationCaptureHandle {
+  /** Backs out of an in-progress draft/result review. Returns true if it handled (and consumed) the back press. */
+  handleBack: () => boolean;
+}
+
+export const ObservationCapture = forwardRef<ObservationCaptureHandle, { store: Store; onBusyChange?: (busy: boolean) => void }>(
+  function ObservationCapture({ store, onBusyChange }, ref) {
   const { theme } = useTheme();
   const styles = makeStyles(theme);
   const [messages, setMessages] = useState<Msg[]>(() => [msg("assistant", GREETING)]);
@@ -184,6 +190,16 @@ export function ObservationCapture({ store, onBusyChange }: { store: Store; onBu
     transcriptRef.current = "";
   }
 
+  useImperativeHandle(ref, () => ({
+    handleBack: () => {
+      if (result || draft || saved) {
+        reset();
+        return true;
+      }
+      return false;
+    },
+  }), [result, draft, saved]);
+
   const toInt = (v: string) => (v.trim() === "" ? null : Number.isFinite(parseInt(v, 10)) ? parseInt(v, 10) : null);
   const canSend = !loading && text.trim().length >= (awaitingAnswer ? 2 : 10);
 
@@ -282,7 +298,7 @@ export function ObservationCapture({ store, onBusyChange }: { store: Store; onBu
       </View>
     </KeyboardAvoidingView>
   );
-}
+});
 
 function Bubble({ msg: m }: { msg: Msg }) {
   const { theme } = useTheme();

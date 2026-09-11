@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { forwardRef, useImperativeHandle, useMemo, useState } from "react";
 import { Pressable, SectionList, StyleSheet, Text, View } from "react-native";
 import { MODALITIES, OBSERVATION_STATUSES, type ObservationRecord, type ObservationStatus } from "../../shared/observation";
 import type { useStore } from "../lib/store";
@@ -51,13 +51,28 @@ function buildSections(observations: ObservationRecord[], groupKey: GroupKey) {
   }));
 }
 
-export function RecordsTab({ store, focusClient, onClearFocus }: {
+export interface RecordsTabHandle {
+  /** Cancels an in-progress inline edit. Returns true if it handled (and consumed) the back press. */
+  handleBack: () => boolean;
+}
+
+export const RecordsTab = forwardRef<RecordsTabHandle, {
   store: Store; focusClient: string | null; onClearFocus: () => void;
-}) {
+}>(function RecordsTab({ store, focusClient, onClearFocus }, ref) {
   const { theme } = useTheme();
   const styles = makeStyles(theme);
   const [groupKey, setGroupKey] = useState<GroupKey>("fecha");
   const [editingId, setEditingId] = useState<number | null>(null);
+
+  useImperativeHandle(ref, () => ({
+    handleBack: () => {
+      if (editingId !== null) {
+        setEditingId(null);
+        return true;
+      }
+      return false;
+    },
+  }), [editingId]);
 
   const filtered = focusClient ? store.observations.filter((o) => o.client === focusClient) : store.observations;
   const sections = useMemo(() => buildSections(filtered, groupKey), [filtered, groupKey]);
@@ -102,7 +117,7 @@ export function RecordsTab({ store, focusClient, onClearFocus }: {
       />
     </View>
   );
-}
+});
 
 function RecordRow({ record, onEdit, onDelete }: {
   record: ObservationRecord; onEdit: () => void; onDelete: () => void;

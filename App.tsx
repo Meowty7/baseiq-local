@@ -1,10 +1,12 @@
-import { useState, useCallback } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useFonts } from "expo-font";
 import { Inter_400Regular, Inter_500Medium, Inter_600SemiBold } from "@expo-google-fonts/inter";
-import { Platform, Pressable, SafeAreaView, StatusBar, StyleSheet, Text, View } from "react-native";
+import {
+  BackHandler, PanResponder, Platform, Pressable, SafeAreaView, StatusBar, StyleSheet, Text, View,
+} from "react-native";
 import { useStore } from "./src/lib/store";
-import { ObservationCapture } from "./src/components/ObservationCapture";
-import { RecordsTab } from "./src/components/RecordsTab";
+import { ObservationCapture, type ObservationCaptureHandle } from "./src/components/ObservationCapture";
+import { RecordsTab, type RecordsTabHandle } from "./src/components/RecordsTab";
 import { InsightsTab } from "./src/components/InsightsTab";
 import { ThemeProvider, font, useTheme, type Theme } from "./src/ui/theme";
 
@@ -15,6 +17,9 @@ const TABS: { key: Tab; icon: string; label: string }[] = [
   { key: "records", icon: "☰", label: "Registros" },
   { key: "insights", icon: "◈", label: "Insights" },
 ];
+
+const SWIPE_DISTANCE = 60;
+const SWIPE_DIRECTION_RATIO = 2;
 
 export default function App() {
   return (
@@ -30,13 +35,57 @@ function AppShell() {
   const [fontsLoaded] = useFonts({ Inter_400Regular, Inter_500Medium, Inter_600SemiBold });
   const store = useStore();
   const [activeTab, setActiveTab] = useState<Tab>("capture");
+  const activeTabRef = useRef(activeTab);
+  activeTabRef.current = activeTab;
   const [captureBusy, setCaptureBusy] = useState(false);
   const onCaptureBusy = useCallback((busy: boolean) => setCaptureBusy(busy), []);
   const [focusClient, setFocusClient] = useState<string | null>(null);
+  const focusClientRef = useRef(focusClient);
+  focusClientRef.current = focusClient;
   const goToRecords = useCallback((client: string) => {
     setFocusClient(client);
     setActiveTab("records");
   }, []);
+
+  const captureRef = useRef<ObservationCaptureHandle>(null);
+  const recordsRef = useRef<RecordsTabHandle>(null);
+
+  // Android's back gesture/button used to exit the app straight from any tab.
+  // Now it unwinds one step at a time: cancel an in-progress edit or draft
+  // review first, then clear a client filter, then go back to Captura, and
+  // only exit once there's nothing left to back out of.
+  useEffect(() => {
+    if (Platform.OS !== "android") return;
+    const sub = BackHandler.addEventListener("hardwareBackPress", () => {
+      const tab = activeTabRef.current;
+      if (tab === "capture" && captureRef.current?.handleBack()) return true;
+      if (tab === "records") {
+        if (recordsRef.current?.handleBack()) return true;
+        if (focusClientRef.current) {
+          setFocusClient(null);
+          return true;
+        }
+      }
+      if (tab !== "capture") {
+        setActiveTab("capture");
+        return true;
+      }
+      return false;
+    });
+    return () => sub.remove();
+  }, []);
+
+  const panResponder = useRef(
+    PanResponder.create({
+      onMoveShouldSetPanResponder: (_, g) =>
+        Math.abs(g.dx) > 20 && Math.abs(g.dx) > Math.abs(g.dy) * SWIPE_DIRECTION_RATIO,
+      onPanResponderRelease: (_, g) => {
+        const idx = TABS.findIndex((t) => t.key === activeTabRef.current);
+        if (g.dx <= -SWIPE_DISTANCE && idx < TABS.length - 1) setActiveTab(TABS[idx + 1].key);
+        else if (g.dx >= SWIPE_DISTANCE && idx > 0) setActiveTab(TABS[idx - 1].key);
+      },
+    }),
+  ).current;
 
   if (!fontsLoaded) return <SafeAreaView style={styles.safe} />;
 
@@ -66,12 +115,12 @@ function AppShell() {
         </Pressable>
       </View>
 
-      <View style={styles.body}>
+      <View style={styles.body} {...panResponder.panHandlers}>
         <View style={[styles.panel, activeTab !== "capture" && styles.panelHidden]} pointerEvents={activeTab === "capture" ? "auto" : "none"}>
-          <ObservationCapture store={store} onBusyChange={onCaptureBusy} />
+          <ObservationCapture ref={captureRef} store={store} onBusyChange={onCaptureBusy} />
         </View>
         {activeTab === "records" && (
-          <RecordsTab store={store} focusClient={focusClient} onClearFocus={() => setFocusClient(null)} />
+          <RecordsTab ref={recordsRef} store={store} focusClient={focusClient} onClearFocus={() => setFocusClient(null)} />
         )}
         {activeTab === "insights" && (
           <InsightsTab overview={store.overview} observations={store.observations} onViewClient={goToRecords} />
