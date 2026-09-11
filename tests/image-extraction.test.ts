@@ -1,6 +1,6 @@
 import { afterEach, expect, spyOn, test } from "bun:test";
 import * as qvac from "../src/lib/qvac";
-import { extractObservationFromImage } from "../src/lib/extraction";
+import { extractObservationFromImage, parseModelJson } from "../src/lib/extraction";
 
 const calls: { system: string; user: string; imagePath: string; schema: object }[] = [];
 
@@ -58,4 +58,28 @@ test("extractObservationFromImage anula marca que no aparece en la evidencia del
   spy.mockRestore();
   const ct = draft.equipment.find((e) => e.modality === "tomografo");
   expect(ct?.brand).toBeNull();
+});
+
+test("parseModelJson quita razonamiento del VLM de 0.8B y prefijos antes del JSON", () => {
+  const json = JSON.stringify({
+    client: "Saint Jude", city: null, country: null,
+    equipment: [{ modality: "CT", quantity: 1, brand: null, model: null, ageYears: null, evidence: "CT" }],
+    missing: [],
+  });
+  expect(parseModelJson(json)).toEqual(JSON.parse(json));
+  expect(parseModelJson(`reasoning here\n</think>\n${json}`)).toEqual(JSON.parse(json));
+  expect(parseModelJson(`Sure, here is the JSON:\n${json}`)).toEqual(JSON.parse(json));
+  expect(() => parseModelJson("only reasoning, no json")).toThrow(SyntaxError);
+});
+
+test("extractObservationFromImage parsea JSON aunque el VLM emita razonamiento antes", async () => {
+  const json = JSON.stringify({
+    client: "Hospital DemoCare Pacific", city: null, country: "Panama",
+    equipment: [{ modality: "MRI", quantity: 1, brand: null, model: null, ageYears: null, evidence: "MRI" }],
+    missing: [],
+  });
+  const spy = stubImage({ text: `The photo shows an MRI unit.\n</think>\n${json}`, inferMs: 200 });
+  const { draft } = await extractObservationFromImage("/tmp/fake3.jpg", "es");
+  spy.mockRestore();
+  expect(draft.client).toBe("Hospital DemoCare Pacific");
 });

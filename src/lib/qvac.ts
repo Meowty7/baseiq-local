@@ -225,6 +225,13 @@ export function isMissingModelError(error: unknown): boolean {
   return error instanceof Error && /Model with ID ".+" not found/i.test(error.message);
 }
 
+/** BareKit TurboModule missing or the Worklet class failed to load. Retrying
+ * GPU→CPU hits the same constructor; it is not a device-capability failure. */
+export function isWorkerInitError(error: unknown): boolean {
+  const msg = error instanceof Error ? error.message : String(error ?? "");
+  return /BareKit|TurboModuleRegistry|cannot be used as a constructor/i.test(msg);
+}
+
 function nativePlatform(): string | null {
   try {
     return require("react-native").Platform.OS;
@@ -350,7 +357,7 @@ async function loadLlmLocked(onProgress?: (pct: number) => void): Promise<string
       console.log(`▸ QVAC device=${st.device} model=${selected.name}`);
       return id;
     } catch (err) {
-      if (preferred === "cpu") throw err;
+      if (preferred === "cpu" || isWorkerInitError(err)) throw err;
       st.gpuFailed = true;
       console.warn(`▸ QVAC GPU load failed, falling back to CPU:`, err instanceof Error ? err.message : err);
       const id = await loadOn("cpu", onProgress);
@@ -741,20 +748,31 @@ export async function transcribeAudio(uri: string, opts: TranscribeOptions = {})
   });
 }
 
+/**
+ * Vision stays off the GPU. Android never unloads the text LLM (QVAC-19304),
+ * so a second GGUF+mmproj (~620 MB) onto Adreno sits at ~97% for minutes.
+ * mmap on CPU is a few seconds once the files are cached.
+ */
+export function visionModelConfig() {
+  return {
+    device: "cpu" as const,
+    gpu_layers: 0,
+    "mmproj-use-gpu": false,
+    load_mode: "mmap" as const,
+    // Default 1024 is too small: a 768px image eats ~500-700 visual tokens,
+    // leaving no room for the JSON output. 4096 fits image + prompt + full JSON.
+    ctx_size: 4096,
+    projectionModelSrc: MMPROJ_QWEN3_5_0_8B_MULTIMODAL_Q8_0,
+  };
+}
+
 async function loadVisionLocked(): Promise<string> {
   if (st.visionId) return st.visionId;
-  const preferred = preferredDevice();
-  const cfg = preferred === "gpu"
-    ? { device: "gpu", gpu_layers: 99, "mmproj-use-gpu": false }
-    : { device: "cpu", gpu_layers: 0, "mmproj-use-gpu": false };
-  // GGUF + mmproj together are several hundred MB; the model then has to be
-  // mapped onto the GPU. Both phases are slow on a phone, so the stall window
-  // is wider than for the text LLM.
+  const cfg = visionModelConfig();
   const id = await withStallTimeout(
     (report) => loadModel({
       modelSrc: MODELS.qwen35.src,
       modelType: "llamacpp-completion",
-      projectionModelSrc: MMPROJ_QWEN3_5_0_8B_MULTIMODAL_Q8_0,
       modelConfig: cfg,
       onProgress: (p: { percentage: number }) => report(p.percentage),
     } as unknown as Parameters<typeof loadModel>[0]),
@@ -762,7 +780,7 @@ async function loadVisionLocked(): Promise<string> {
     "load_timeout",
     (pct) => emitAuxProgress("vision", pct),
   );
-  console.log(`▸ QVAC vision=QWEN3_5_0_8B_MULTIMODAL_Q4_K_M device=${preferred}`);
+  console.log("▸ QVAC vision=QWEN3_5_0_8B_MULTIMODAL_Q4_K_M device=cpu");
   st.visionId = id;
   emitAuxProgress("vision", 100);
   return id;

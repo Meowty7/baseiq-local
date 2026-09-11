@@ -41,6 +41,17 @@ function retryableInferError(err: unknown): boolean {
   return err instanceof SyntaxError;
 }
 
+/** Strip Qwen3 reasoning channel and any non-JSON prefix before parsing.
+ *  The 0.8B VLM ignores /no_think and emits a reasoning block despite the
+ *  system prompt; larger models don't, but the strip is a no-op for them. */
+export function parseModelJson(raw: string): unknown {
+  let s = raw.trim();
+  s = s.replace(/<think>[\s\S]*?<\/redacted_thinking>\s*/gi, "");
+  const i = s.indexOf("{");
+  if (i > 0) s = s.slice(i);
+  return JSON.parse(s);
+}
+
 export async function extractObservation(
   text: string,
   lang = "es",
@@ -55,7 +66,7 @@ export async function extractObservation(
     try {
       onProgress?.(emptyInferSnapshot("decoding"));
       const { text: raw, inferMs, stats } = await inferJson(SYSTEM, english, EXTRACTION_SCHEMA, 45000, onProgress);
-      const draft = groundDraft(normalizeDraft(JSON.parse(raw.trim())), sourceForGrounding, english);
+      const draft = groundDraft(normalizeDraft(parseModelJson(raw)), sourceForGrounding, english);
       draft.missing = computeMissing(draft);
       return { draft, question: nextQuestion(draft, lang), inferMs, stats, english, translateVia: via };
     } catch (err) {
@@ -78,7 +89,7 @@ export async function extractObservationFromImage(
     try {
       onProgress?.(emptyInferSnapshot("decoding"));
       const { text: raw, inferMs, stats } = await inferJsonWithImage(SYSTEM_VISION, "Extract the inventory from this photo.", uri, EXTRACTION_SCHEMA, 120000, onProgress, onLoadProgress);
-      const draft = normalizeDraft(JSON.parse(raw.trim()));
+      const draft = normalizeDraft(parseModelJson(raw));
       // For images there is no source text to ground against. The VLM counted units
       // and read the nameplate directly, so keep its quantity/modality/age/client/geo.
       // Only brand/model get validated against the VLM's own evidence quotes: a brand
