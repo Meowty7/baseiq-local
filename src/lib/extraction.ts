@@ -1,5 +1,6 @@
 import { EXTRACTION_SCHEMA, normalizeDraft, nextQuestion, groundDraft, toEnglishObservation, type ObservationDraft } from "../../shared/observation";
-import { inferJson, translateNote } from "./qvac";
+import { inferJson, translateNote, type InferSnapshot } from "./qvac";
+import { emptyInferSnapshot } from "./infer-metrics";
 
 const SYSTEM =
   "Extract inventory. JSON only. No invent. Absent field = null. Keep original names. " +
@@ -37,16 +38,19 @@ function retryableInferError(err: unknown): boolean {
 export async function extractObservation(
   text: string,
   lang = "es",
-): Promise<{ draft: ObservationDraft; question: string | null; inferMs: number; english: string; translateVia: TranslateVia }> {
+  onProgress?: (snap: InferSnapshot) => void,
+): Promise<{ draft: ObservationDraft; question: string | null; inferMs: number; stats: InferSnapshot; english: string; translateVia: TranslateVia }> {
   let lastError: unknown = null;
+  if (lang !== "en") onProgress?.(emptyInferSnapshot("translating"));
   const { english, via } = await resolveObservationEnglish(text, lang);
   const sourceForGrounding = lang === "es" ? text : english;
   for (let attempt = 0; attempt < 2; attempt++) {
     try {
-      const { text: raw, inferMs } = await inferJson(SYSTEM, english, EXTRACTION_SCHEMA);
+      onProgress?.(emptyInferSnapshot("decoding"));
+      const { text: raw, inferMs, stats } = await inferJson(SYSTEM, english, EXTRACTION_SCHEMA, 45000, onProgress);
       const draft = groundDraft(normalizeDraft(JSON.parse(raw.trim())), sourceForGrounding, english);
       draft.missing = computeMissing(draft);
-      return { draft, question: nextQuestion(draft, lang), inferMs, english, translateVia: via };
+      return { draft, question: nextQuestion(draft, lang), inferMs, stats, english, translateVia: via };
     } catch (err) {
       lastError = err;
       if (err instanceof Error) console.warn(`extract attempt ${attempt + 1} failed: ${err.message}`);

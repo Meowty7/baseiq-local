@@ -4,7 +4,7 @@ import {
   getDb, listObservations, saveObservation,
   updateObservation, updateObservationClient, updateEquipment, deleteObservation,
 } from "./db";
-import { ensureModel, ensureTranslator, isReady, isBusy, getLastInferMs, getDevice, setDeviceOverride, MODEL_NAME, releaseUnusedTranslators } from "./qvac";
+import { ensureModel, ensureTranslator, isReady, isBusy, getLastInferMs, getDevice, setDeviceOverride, MODEL_NAME, releaseUnusedTranslators, type InferSnapshot } from "./qvac";
 import { extractObservation } from "./extraction";
 import { isLang, localizeUi, type Lang } from "../i18n";
 import {
@@ -40,6 +40,7 @@ export interface ExtractionResult {
   draft: ObservationDraft;
   question: string | null;
   inferMs: number;
+  stats: InferSnapshot;
   sourceText: string;
 }
 
@@ -158,9 +159,9 @@ export function useStore() {
     })();
   }, []);
 
-  const extract = useCallback(async (text: string): Promise<ExtractionResult> => {
-    const { draft, question, inferMs } = await extractObservation(text.trim(), lang);
-    return { draft, question, inferMs, sourceText: text.trim() };
+  const extract = useCallback(async (text: string, onProgress?: (snap: InferSnapshot) => void): Promise<ExtractionResult> => {
+    const { draft, question, inferMs, stats } = await extractObservation(text.trim(), lang, onProgress);
+    return { draft, question, inferMs, stats, sourceText: text.trim() };
   }, [lang]);
 
   const save = useCallback((input: {

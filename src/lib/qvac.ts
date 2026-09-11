@@ -6,6 +6,15 @@ import {
   HEALTHCARE_4B_MEDICAL_IQ3_XXS,
 } from "@qvac/sdk";
 import * as QvacSdk from "@qvac/sdk";
+import {
+  applyCompletionEvent,
+  emptyInferSnapshot,
+  mergeSdkStats,
+  type InferSnapshot,
+} from "./infer-metrics";
+
+export type { InferPhase, InferSnapshot } from "./infer-metrics";
+export { formatInferCaption, formatMs, formatTps } from "./infer-metrics";
 
 export const MODELS = {
   qwen: { src: QWEN3_600M_INST_Q4, name: "QWEN3_600M_INST_Q4" },
@@ -72,6 +81,7 @@ type QvacState = {
   modelId: string | null;
   loading: Promise<string> | null;
   lastInferMs: number | null;
+  lastInferStats: InferSnapshot | null;
   device: InferDevice | null;
   gpuFailed: boolean;
   deviceOverride: InferDevice | null;
@@ -94,6 +104,7 @@ const st = g.__baseiqQvac ?? (g.__baseiqQvac = {
   modelId: null,
   loading: null,
   lastInferMs: null,
+  lastInferStats: null,
   device: null,
   gpuFailed: false,
   deviceOverride: null,
@@ -112,6 +123,7 @@ st.translatorLoading ??= {};
 st.translatorFailed ??= {};
 st.lastTranslateMs ??= null;
 st.lastTranslateStats ??= null;
+st.lastInferStats ??= null;
 st.translatorTail ??= Promise.resolve();
 st.translatorInflight ??= 0;
 
@@ -139,6 +151,7 @@ export function isBusy(): boolean {
   return st.inflight > 0 || st.loading !== null || st.translatorInflight > 0 || Object.keys(st.translatorLoading).length > 0;
 }
 export function getLastInferMs(): number | null { return st.lastInferMs; }
+export function getLastInferStats(): InferSnapshot | null { return st.lastInferStats; }
 export function getLastTranslateMs(): number | null { return st.lastTranslateMs; }
 export function getLastTranslateStats(): TranslateStats | null { return st.lastTranslateStats; }
 export function getDevice(): InferDevice | null { return st.device; }
@@ -366,7 +379,70 @@ export async function releaseUnusedTranslators(keepLang: string): Promise<void> 
   }
 }
 
-export async function inferJson(system: string, user: string, schema: object, timeoutMs = 45000): Promise<{ text: string; inferMs: number }> {
+type CompletionFinal = { contentText: string; stats?: unknown };
+type CompletionRun = {
+  events?: AsyncIterable<{ type?: unknown; text?: unknown; stats?: unknown }>;
+  tokenStream?: AsyncIterable<string>;
+  final: Promise<CompletionFinal>;
+};
+
+async function runStructuredCompletion(
+  id: string,
+  system: string,
+  user: string,
+  schema: object,
+  timeoutMs: number,
+  onProgress: ((snap: InferSnapshot) => void) | undefined,
+  t0: number,
+): Promise<{ final: CompletionFinal; snap: InferSnapshot }> {
+  const run = completion({
+    modelId: id,
+    history: [
+      { role: "system", content: system },
+      { role: "user", content: user },
+    ],
+    stream: true,
+    responseFormat: { type: "json_schema", json_schema: { name: "observation", schema: schema as Record<string, unknown> } },
+  }) as CompletionRun;
+
+  let snap = emptyInferSnapshot("decoding");
+  const emit = (next: InferSnapshot) => {
+    snap = { ...next, inferMs: Date.now() - t0 };
+    st.lastInferStats = snap;
+    onProgress?.(snap);
+  };
+  emit(snap);
+
+  const work = (async () => {
+    if (run.events) {
+      for await (const event of run.events) {
+        emit(applyCompletionEvent(snap, event, Date.now(), t0));
+      }
+    } else if (run.tokenStream) {
+      for await (const text of run.tokenStream) {
+        emit(applyCompletionEvent(snap, { type: "contentDelta", text }, Date.now(), t0));
+      }
+    }
+    return await run.final;
+  })();
+
+  try {
+    const final = await withTimeout(work, timeoutMs, "infer_timeout");
+    return { final, snap };
+  } catch (err) {
+    // ponytail: race no cancela el worker. Esperar el final nativo antes de la siguiente inferencia.
+    await run.final.catch(() => {});
+    throw err;
+  }
+}
+
+export async function inferJson(
+  system: string,
+  user: string,
+  schema: object,
+  timeoutMs = 45000,
+  onProgress?: (snap: InferSnapshot) => void,
+): Promise<{ text: string; inferMs: number; stats: InferSnapshot }> {
   const prev = st.tail;
   let release!: () => void;
   st.tail = new Promise<void>((r) => { release = r; });
@@ -375,29 +451,10 @@ export async function inferJson(system: string, user: string, schema: object, ti
 
   const t0 = Date.now();
   try {
-    const complete = async (id: string) => {
-      const run = completion({
-        modelId: id,
-        history: [
-          { role: "system", content: system },
-          { role: "user", content: user },
-        ],
-        stream: false,
-        responseFormat: { type: "json_schema", json_schema: { name: "observation", schema: schema as Record<string, unknown> } },
-      });
-      try {
-        return await withTimeout(run.final, timeoutMs, "infer_timeout");
-      } catch (err) {
-        // ponytail: race no cancela el worker. Esperar el final nativo antes de la siguiente inferencia.
-        await run.final.catch(() => {});
-        throw err;
-      }
-    };
-
     let id = await ensureModel();
-    let final;
+    let result: { final: CompletionFinal; snap: InferSnapshot };
     try {
-      final = await complete(id);
+      result = await runStructuredCompletion(id, system, user, schema, timeoutMs, onProgress, t0);
     } catch (error) {
       if (st.device !== "gpu" || !isMissingModelError(error)) throw error;
       st.gpuFailed = true;
@@ -405,10 +462,17 @@ export async function inferJson(system: string, user: string, schema: object, ti
       st.loading = null;
       st.device = null;
       id = await ensureModel();
-      final = await complete(id);
+      result = await runStructuredCompletion(id, system, user, schema, timeoutMs, onProgress, t0);
     }
     st.lastInferMs = Date.now() - t0;
-    return { text: final.contentText, inferMs: st.lastInferMs };
+    const stats = mergeSdkStats({ ...result.snap, phase: "done" }, result.final.stats, st.lastInferMs);
+    st.lastInferStats = stats;
+    onProgress?.(stats);
+    const tps = stats.tokensPerSecond != null ? stats.tokensPerSecond.toFixed(1) : "?";
+    console.log(
+      `▸ QVAC infer ${st.lastInferMs}ms TTFT=${stats.ttftMs ?? "?"}ms tok=${stats.tokens ?? "?"} ${tps} tok/s`,
+    );
+    return { text: result.final.contentText, inferMs: st.lastInferMs, stats };
   } finally {
     st.inflight = Math.max(0, st.inflight - 1);
     release();
