@@ -66,11 +66,12 @@ export async function extractObservation(
 export async function extractObservationFromImage(
   uri: string,
   lang = "es",
+  onLoadProgress?: (pct: number) => void,
 ): Promise<{ draft: ObservationDraft; question: string | null; inferMs: number }> {
   let lastError: unknown = null;
   for (let attempt = 0; attempt < 2; attempt++) {
     try {
-      const { text: raw, inferMs } = await inferJsonWithImage(SYSTEM_VISION, "Extract the inventory from this photo.", uri, EXTRACTION_SCHEMA);
+      const { text: raw, inferMs } = await inferJsonWithImage(SYSTEM_VISION, "Extract the inventory from this photo.", uri, EXTRACTION_SCHEMA, undefined, onLoadProgress);
       const draft = normalizeDraft(JSON.parse(raw.trim()));
       // For images there is no source text to ground against. The VLM counted units
       // and read the nameplate directly, so keep its quantity/modality/age/client/geo.
