@@ -1,8 +1,10 @@
 import {
-  loadModel, completion, unloadModel, translate,
+  loadModel, completion, unloadModel, translate, transcribe,
   QWEN3_600M_INST_Q4, LLAMA_3_2_1B_INST_Q4_0, HEALTHCARE_1_7B_MEDICAL_IQ3_XXS,
   QWEN3_1_7B_INST_Q4, SMOLLM2_360M_INST_Q8, SALAMANDRATA_2B_INST_Q4,
   LLAMA_TOOL_CALLING_1B_INST_Q4_K, QWEN3_5_0_8B_MULTIMODAL_Q4_K_M,
+  MMPROJ_QWEN3_5_0_8B_MULTIMODAL_Q8_0,
+  WHISPER_SPANISH_TINY_Q8_0,
   HEALTHCARE_4B_MEDICAL_IQ3_XXS,
 } from "@qvac/sdk";
 import * as QvacSdk from "@qvac/sdk";
@@ -85,6 +87,10 @@ type QvacState = {
   lastTranslateStats: TranslateStats | null;
   translatorTail: Promise<void>;
   translatorInflight: number;
+  whisperId: string | null;
+  whisperLoading: Promise<string> | null;
+  visionId: string | null;
+  visionLoading: Promise<string> | null;
 };
 
 // ponytail: Fast Refresh (bun run start) reinicia este módulo y modelId queda null,
@@ -108,6 +114,10 @@ const st = g.__baseiqQvac ?? (g.__baseiqQvac = {
   lastTranslateStats: null,
   translatorTail: Promise.resolve(),
   translatorInflight: 0,
+  whisperId: null,
+  whisperLoading: null,
+  visionId: null,
+  visionLoading: null,
 });
 st.translators ??= {};
 st.translatorLoading ??= {};
@@ -116,6 +126,10 @@ st.lastTranslateMs ??= null;
 st.lastTranslateStats ??= null;
 st.translatorTail ??= Promise.resolve();
 st.translatorInflight ??= 0;
+st.whisperId ??= null;
+st.whisperLoading ??= null;
+st.visionId ??= null;
+st.visionLoading ??= null;
 if (!st.nativeUnified) {
   // LLM + NMT share one Bare worker. Overlapping loadModel/completion on Adreno
   // never returns (same failure mode as reloading the LLM on HMR).
@@ -150,6 +164,8 @@ export function setDeviceOverride(d: InferDevice | null): void {
 }
 
 export function isReady(): boolean { return st.modelId !== null; }
+export function isWhisperReady(): boolean { return st.whisperId !== null; }
+export function isVisionReady(): boolean { return st.visionId !== null; }
 export function isTranslatorReady(from?: string, to?: string): boolean {
   if (from && to) {
     if (from === to) return true;
@@ -158,7 +174,7 @@ export function isTranslatorReady(from?: string, to?: string): boolean {
   return Object.keys(st.translators).length > 0;
 }
 export function isBusy(): boolean {
-  return st.inflight > 0 || st.loading !== null || st.translatorInflight > 0 || Object.keys(st.translatorLoading).length > 0;
+  return st.inflight > 0 || st.loading !== null || st.translatorInflight > 0 || Object.keys(st.translatorLoading).length > 0 || st.whisperLoading !== null || st.visionLoading !== null;
 }
 export function getLastInferMs(): number | null { return st.lastInferMs; }
 export function getLastTranslateMs(): number | null { return st.lastTranslateMs; }
@@ -457,6 +473,119 @@ export async function inferJson(system: string, user: string, schema: object, ti
       }
       st.lastInferMs = Date.now() - t0;
       return { text: final.contentText, inferMs: st.lastInferMs };
+    } finally {
+      st.inflight = Math.max(0, st.inflight - 1);
+    }
+  });
+}
+
+async function loadWhisperLocked(): Promise<string> {
+  if (st.whisperId) return st.whisperId;
+  const id = await withTimeout(
+    loadModel({
+      modelSrc: WHISPER_SPANISH_TINY_Q8_0,
+      modelType: "whispercpp-transcription",
+      modelConfig: { language: "es", audio_format: "s16le" } as Record<string, unknown>,
+    } as unknown as Parameters<typeof loadModel>[0]),
+    120000,
+    "load_timeout",
+  );
+  console.log("▸ QVAC whisper=WHISPER_SPANISH_TINY_Q8_0 device=cpu");
+  st.whisperId = id;
+  return id;
+}
+
+export function ensureWhisper(): Promise<string> {
+  if (st.whisperId) return Promise.resolve(st.whisperId);
+  if (!st.whisperLoading) {
+    st.whisperLoading = withNativeLock(() => loadWhisperLocked())
+      .then((id) => { st.whisperLoading = null; return id; })
+      .catch((err) => { st.whisperLoading = null; throw err; });
+  }
+  return st.whisperLoading;
+}
+
+export async function transcribeAudio(path: string, timeoutMs = 30000): Promise<string> {
+  return withNativeLock(async () => {
+    const id = await loadWhisperLocked();
+    st.inflight += 1;
+    try {
+      const text = await withTimeout(
+        transcribe({ modelId: id, audioChunk: path, prompt: "es" } as Parameters<typeof transcribe>[0]),
+        timeoutMs,
+        "transcribe_timeout",
+      );
+      return typeof text === "string" ? text.trim() : "";
+    } finally {
+      st.inflight = Math.max(0, st.inflight - 1);
+    }
+  });
+}
+
+async function loadVisionLocked(): Promise<string> {
+  if (st.visionId) return st.visionId;
+  const preferred = preferredDevice();
+  const cfg = preferred === "gpu"
+    ? { device: "gpu", gpu_layers: 99, "mmproj-use-gpu": false }
+    : { device: "cpu", gpu_layers: 0, "mmproj-use-gpu": false };
+  const id = await withTimeout(
+    loadModel({
+      modelSrc: MODELS.qwen35.src,
+      modelType: "llamacpp-completion",
+      projectionModelSrc: MMPROJ_QWEN3_5_0_8B_MULTIMODAL_Q8_0,
+      modelConfig: cfg,
+    } as unknown as Parameters<typeof loadModel>[0]),
+    180000,
+    "load_timeout",
+  );
+  console.log(`▸ QVAC vision=QWEN3_5_0_8B_MULTIMODAL_Q4_K_M device=${preferred}`);
+  st.visionId = id;
+  return id;
+}
+
+export function ensureVisionModel(): Promise<string> {
+  if (st.visionId) return Promise.resolve(st.visionId);
+  if (!st.visionLoading) {
+    st.visionLoading = withNativeLock(() => loadVisionLocked())
+      .then((id) => { st.visionLoading = null; return id; })
+      .catch((err) => { st.visionLoading = null; throw err; });
+  }
+  return st.visionLoading;
+}
+
+export async function inferJsonWithImage(
+  system: string,
+  user: string,
+  imagePath: string,
+  schema: object,
+  timeoutMs = 60000,
+): Promise<{ text: string; inferMs: number }> {
+  return withNativeLock(async () => {
+    st.inflight += 1;
+    const t0 = Date.now();
+    try {
+      const id = await loadVisionLocked();
+      const run = completion({
+        modelId: id,
+        history: [
+          { role: "system", content: system },
+          { role: "user", content: user, attachments: [{ path: imagePath }] },
+        ],
+        stream: false,
+        responseFormat: { type: "json_schema", json_schema: { name: "observation", schema: schema as Record<string, unknown> } },
+      });
+      try {
+        const final = await withTimeout(run.final, timeoutMs, "infer_timeout");
+        st.lastInferMs = Date.now() - t0;
+        return { text: final.contentText, inferMs: st.lastInferMs };
+      } catch (err) {
+        const late = await run.final.then((v) => v, () => null);
+        if (late?.contentText?.trim()) {
+          console.warn(`▸ QVAC vision infer recovered after timeout (${Date.now() - t0}ms)`);
+          return { text: late.contentText, inferMs: Date.now() - t0 };
+        }
+        throw err;
+      }
     } finally {
       st.inflight = Math.max(0, st.inflight - 1);
     }

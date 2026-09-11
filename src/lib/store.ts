@@ -4,8 +4,8 @@ import {
   getDb, listObservations, saveObservation,
   updateObservation, updateObservationClient, updateEquipment, deleteObservation,
 } from "./db";
-import { ensureModel, isReady, isBusy, getLastInferMs, getDevice, setDeviceOverride, MODEL_NAME, releaseUnusedTranslators } from "./qvac";
-import { extractObservation } from "./extraction";
+import { ensureModel, isReady, isBusy, getLastInferMs, getDevice, setDeviceOverride, MODEL_NAME, releaseUnusedTranslators, transcribeAudio } from "./qvac";
+import { extractObservation, extractObservationFromImage } from "./extraction";
 import { isLang, localizeUi, type Lang } from "../i18n";
 import {
   OBSERVATION_STATUSES, SOURCE_TYPES, freshness, detectConflicts, normalizeDraft,
@@ -164,6 +164,15 @@ export function useStore() {
     return { draft, question, inferMs, sourceText: text.trim() };
   }, [lang]);
 
+  const transcribe = useCallback(async (audioPath: string): Promise<string> => {
+    return transcribeAudio(audioPath);
+  }, []);
+
+  const extractImage = useCallback(async (uri: string): Promise<ExtractionResult> => {
+    const { draft, question, inferMs } = await extractObservationFromImage(uri, lang);
+    return { draft, question, inferMs, sourceText: "(imagen)" };
+  }, [lang]);
+
   const save = useCallback((input: {
     client: string; city: string | null; country: string | null;
     status: ObservationStatus; sourceText: string;
@@ -211,5 +220,5 @@ export function useStore() {
     refresh();
   }, [refresh]);
 
-  return { status, observations, overview, progress, lang, setLang, uiLocalizing, uiLocalizeProgress, refresh, extract, save, update, remove };
+  return { status, observations, overview, progress, lang, setLang, uiLocalizing, uiLocalizeProgress, refresh, extract, transcribe, extractImage, save, update, remove };
 }
