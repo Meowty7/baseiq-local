@@ -1,23 +1,22 @@
-import { expect, mock, test } from "bun:test";
-
-let imageHandler: (system: string, user: string, imagePath: string, schema: object) => Promise<{ text: string; inferMs: number }>;
+import { afterEach, expect, spyOn, test } from "bun:test";
+import * as qvac from "../src/lib/qvac";
+import { extractObservationFromImage } from "../src/lib/extraction";
 
 const calls: { system: string; user: string; imagePath: string; schema: object }[] = [];
 
-mock.module("../src/lib/qvac", () => ({
-  inferJson: async () => ({ text: "{}", inferMs: 0 }),
-  translateNote: async () => "",
-  inferJsonWithImage: async (system: string, user: string, imagePath: string, schema: object) => {
-    calls.push({ system, user, imagePath, schema });
-    return imageHandler(system, user, imagePath, schema);
-  },
-}));
+afterEach(() => {
+  calls.length = 0;
+});
 
-const extraction = await import("../src/lib/extraction");
+function stubImage(result: { text: string; inferMs: number }) {
+  return spyOn(qvac, "inferJsonWithImage").mockImplementation(async (system, user, imagePath, schema) => {
+    calls.push({ system, user, imagePath, schema });
+    return { ...result, stats: { phase: "done" as const, inferMs: result.inferMs } };
+  });
+}
 
 test("extractObservationFromImage pasa el path de la imagen como attachment y blinda contra la evidencia", async () => {
-  calls.length = 0;
-  imageHandler = async () => ({
+  const spy = stubImage({
     text: JSON.stringify({
       client: "Hospital DemoCare Pacific",
       city: null,
@@ -30,7 +29,8 @@ test("extractObservationFromImage pasa el path de la imagen como attachment y bl
     }),
     inferMs: 120,
   });
-  const { draft, question, inferMs } = await extraction.extractObservationFromImage("/tmp/fake-nameplate.jpg", "es");
+  const { draft, question, inferMs } = await extractObservationFromImage("/tmp/fake-nameplate.jpg", "es");
+  spy.mockRestore();
   expect(calls.length).toBe(1);
   expect(calls[0].imagePath).toBe("/tmp/fake-nameplate.jpg");
   expect(inferMs).toBe(120);
@@ -46,8 +46,7 @@ test("extractObservationFromImage pasa el path de la imagen como attachment y bl
 });
 
 test("extractObservationFromImage anula marca que no aparece en la evidencia del VLM", async () => {
-  calls.length = 0;
-  imageHandler = async () => ({
+  const spy = stubImage({
     text: JSON.stringify({
       client: null, city: null, country: null,
       equipment: [{ modality: "CT", quantity: 1, brand: "Philips", model: null, ageYears: null, evidence: "CT scanner" }],
@@ -55,7 +54,8 @@ test("extractObservationFromImage anula marca que no aparece en la evidencia del
     }),
     inferMs: 50,
   });
-  const { draft } = await extraction.extractObservationFromImage("/tmp/fake2.jpg", "es");
+  const { draft } = await extractObservationFromImage("/tmp/fake2.jpg", "es");
+  spy.mockRestore();
   const ct = draft.equipment.find((e) => e.modality === "tomografo");
   expect(ct?.brand).toBeNull();
 });

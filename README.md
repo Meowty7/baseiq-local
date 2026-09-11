@@ -40,7 +40,7 @@ Expo / React Native (teléfono o desktop)
 - `src/lib/extraction.ts` — traducción híbrida + prompt EN + `json_schema` + reintento. ES se groundea contra el original; el resto contra la traducción EN.
 - `src/lib/db.ts` / `store.ts` — SQLite local + `lang` persistido.
 - `shared/observation.ts` — contrato, léxico ES→EN de fallback y reglas anti-alucinación.
-- Inferencia **nunca** sale del equipo. Stack obligatorio: QVAC (`@qvac/sdk`).
+- Inferencia **nunca** sale del equipo. Stack obligatorio: QVAC (`@qvac/sdk`). Durante la extracción, Captura muestra en vivo **TTFT**, recuento de tokens y **tok/s**.
 
 Modelo de extracción por defecto: **Qwen3 0.6B Q4**. Override: `QVAC_MODEL=llama` (u otro del mapa en `qvac.ts`).
 

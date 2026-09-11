@@ -4,7 +4,7 @@ import {
   getDb, listObservations, saveObservation,
   updateObservation, updateObservationClient, updateEquipment, deleteObservation,
 } from "./db";
-import { ensureModel, isReady, isBusy, getLastInferMs, getDevice, setDeviceOverride, MODEL_NAME, releaseUnusedTranslators, transcribeAudio } from "./qvac";
+import { ensureModel, isReady, isBusy, getLastInferMs, getDevice, setDeviceOverride, MODEL_NAME, releaseUnusedTranslators, transcribeAudio, type InferSnapshot } from "./qvac";
 import { extractObservation, extractObservationFromImage } from "./extraction";
 import { isLang, localizeUi, type Lang } from "../i18n";
 import {
@@ -40,6 +40,7 @@ export interface ExtractionResult {
   draft: ObservationDraft;
   question: string | null;
   inferMs: number;
+  stats: InferSnapshot;
   sourceText: string;
 }
 
@@ -159,18 +160,18 @@ export function useStore() {
     })();
   }, []);
 
-  const extract = useCallback(async (text: string): Promise<ExtractionResult> => {
-    const { draft, question, inferMs } = await extractObservation(text.trim(), lang);
-    return { draft, question, inferMs, sourceText: text.trim() };
+  const extract = useCallback(async (text: string, onProgress?: (snap: InferSnapshot) => void): Promise<ExtractionResult> => {
+    const { draft, question, inferMs, stats } = await extractObservation(text.trim(), lang, onProgress);
+    return { draft, question, inferMs, stats, sourceText: text.trim() };
   }, [lang]);
 
   const transcribe = useCallback(async (audioPath: string): Promise<string> => {
     return transcribeAudio(audioPath);
   }, []);
 
-  const extractImage = useCallback(async (uri: string): Promise<ExtractionResult> => {
-    const { draft, question, inferMs } = await extractObservationFromImage(uri, lang);
-    return { draft, question, inferMs, sourceText: "(imagen)" };
+  const extractImage = useCallback(async (uri: string, onProgress?: (snap: InferSnapshot) => void): Promise<ExtractionResult> => {
+    const { draft, question, inferMs, stats } = await extractObservationFromImage(uri, lang, onProgress);
+    return { draft, question, inferMs, stats, sourceText: "(imagen)" };
   }, [lang]);
 
   const save = useCallback((input: {

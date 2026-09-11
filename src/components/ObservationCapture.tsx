@@ -1,5 +1,6 @@
 import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from "react";
 import { getDevice } from "../lib/qvac";
+import { dash, formatInferCaption, formatMs, formatTps, liveThroughput, type InferSnapshot } from "../lib/infer-metrics";
 import { ActivityIndicator, Keyboard, KeyboardAvoidingView, Platform, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import { appendFollowUp, MODALITIES, type Modality, type ObservationDraft } from "../../shared/observation";
 import { type useStore, OBSERVATION_STATUSES, SOURCE_TYPES } from "../lib/store";
@@ -83,6 +84,7 @@ export const ObservationCapture = forwardRef<ObservationCaptureHandle, { store: 
   const transcriptRef = useRef("");
   const scrollRef = useRef<ScrollView>(null);
   const [elapsedSec, setElapsedSec] = useState(0);
+  const [live, setLive] = useState<InferSnapshot | null>(null);
   const [androidKeyboardHeight, setAndroidKeyboardHeight] = useState(0);
   const recorderRef = useRef<{ uri: string | null; record: (o?: unknown) => void; stop: () => Promise<void>; prepareToRecordAsync: () => Promise<void> } | null>(null);
 
@@ -115,15 +117,26 @@ export const ObservationCapture = forwardRef<ObservationCaptureHandle, { store: 
   }, [tabBarHeight]);
 
   useEffect(() => {
-    if (!loading) {
+    if (!loading && !analyzingImage) {
       setElapsedSec(0);
       return;
     }
     const t0 = Date.now();
     setElapsedSec(0);
-    const id = setInterval(() => setElapsedSec(Math.floor((Date.now() - t0) / 1000)), 500);
+    const id = setInterval(() => {
+      const inferMs = Date.now() - t0;
+      setElapsedSec(Math.floor(inferMs / 1000));
+      setLive((prev) => {
+        if (!prev) return prev;
+        return {
+          ...prev,
+          inferMs,
+          tokensPerSecond: liveThroughput(prev.tokens, prev.ttftMs, inferMs) ?? prev.tokensPerSecond,
+        };
+      });
+    }, 200);
     return () => clearInterval(id);
-  }, [loading]);
+  }, [loading, analyzingImage]);
 
   const push = (...items: Msg[]) => setMessages((prev) => [...prev, ...items]);
   const awaitingAnswer = !!result?.question && !questionSkipped;
@@ -150,12 +163,14 @@ export const ObservationCapture = forwardRef<ObservationCaptureHandle, { store: 
     setError(null);
     setResult(null);
     setQuestionSkipped(false);
+    setLive({ phase: "waiting", inferMs: 0 });
     try {
-      const res = await store.extract(input);
+      const res = await store.extract(input, setLive);
       setResult(res);
       setDraft(JSON.parse(JSON.stringify(res.draft)));
       const dev = getDevice()?.toUpperCase() ?? "?";
-      const items = [msg("assistant", t("capture.understood"), t("capture.inferCaption", { sec: (res.inferMs / 1000).toFixed(1), device: dev }))];
+      const detail = formatInferCaption(res.stats ?? { phase: "done", inferMs: res.inferMs }, dev);
+      const items = [msg("assistant", t("capture.understood"), t("capture.inferCaption", { detail }))];
       if (res.question) items.push(msg("assistant", res.question));
       push(...items);
     } catch (e) {
@@ -168,6 +183,7 @@ export const ObservationCapture = forwardRef<ObservationCaptureHandle, { store: 
       );
     } finally {
       setLoading(false);
+      setLive(null);
     }
   }
 
@@ -223,18 +239,21 @@ export const ObservationCapture = forwardRef<ObservationCaptureHandle, { store: 
     setError(null);
     setResult(null);
     setQuestionSkipped(false);
+    setLive({ phase: "decoding", inferMs: 0 });
     try {
-      const res = await store.extractImage(uri);
+      const res = await store.extractImage(uri, setLive);
       setResult(res);
       setDraft(JSON.parse(JSON.stringify(res.draft)));
       const dev = getDevice()?.toUpperCase() ?? "?";
-      const items = [msg("assistant", t("capture.understood"), t("capture.inferCaption", { sec: (res.inferMs / 1000).toFixed(1), device: dev }))];
+      const detail = formatInferCaption(res.stats ?? { phase: "done", inferMs: res.inferMs }, dev);
+      const items = [msg("assistant", t("capture.understood"), t("capture.inferCaption", { detail }))];
       if (res.question) items.push(msg("assistant", res.question));
       push(...items);
     } catch (e) {
       setError(t("capture.imageError"));
     } finally {
       setAnalyzingImage(false);
+      setLive(null);
     }
   }
 
@@ -319,23 +338,28 @@ export const ObservationCapture = forwardRef<ObservationCaptureHandle, { store: 
       >
         {messages.map((m) => <Bubble key={m.id} msg={m} />)}
 
-        {loading && (
-          <View style={[styles.bubble, styles.assistant, styles.loadingRow]}>
-            <ActivityIndicator color={theme.color.textSecondary} />
-            <View style={{ flex: 1, gap: 2 }}>
-              <Text style={theme.type.body}>{t("capture.extracting")}</Text>
-              <Text style={theme.type.caption}>
-                {elapsedSec > 0 ? t("capture.elapsed", { n: elapsedSec }) : t("capture.starting")}
-                {getDevice() ? ` · ${getDevice()?.toUpperCase()}` : ""}
-              </Text>
+        {(loading || analyzingImage) && (
+          <View style={[styles.bubble, styles.assistant, styles.loadingCard]}>
+            <View style={styles.loadingRow}>
+              <ActivityIndicator color={theme.color.textSecondary} />
+              <View style={{ flex: 1, gap: 2 }}>
+                <Text style={theme.type.body}>
+                  {analyzingImage ? t("capture.analyzingImage") : live?.phase === "translating" ? t("capture.translating") : t("capture.extracting")}
+                </Text>
+                <Text style={theme.type.caption}>
+                  {elapsedSec > 0 ? t("capture.elapsed", { n: elapsedSec }) : t("capture.starting")}
+                  {getDevice() ? ` · ${getDevice()?.toUpperCase()}` : ""}
+                </Text>
+              </View>
             </View>
+            <MetricsHud live={live} />
           </View>
         )}
 
-        {(transcribing || analyzingImage) && (
+        {transcribing && (
           <View style={[styles.bubble, styles.assistant, styles.loadingRow]}>
             <ActivityIndicator color={theme.color.textSecondary} />
-            <Text style={theme.type.body}>{transcribing ? t("capture.transcribing") : t("capture.analyzingImage")}</Text>
+            <Text style={theme.type.body}>{t("capture.transcribing")}</Text>
           </View>
         )}
 
@@ -455,10 +479,45 @@ function Bubble({ msg: m }: { msg: Msg }) {
   );
 }
 
+function MetricsHud({ live }: { live: InferSnapshot | null }) {
+  const { theme } = useTheme();
+  const { t } = useI18n();
+  const styles = makeStyles(theme);
+  const ttft = live?.ttftMs != null ? formatMs(live.ttftMs) : undefined;
+  const tokens = live?.tokens != null ? String(Math.round(live.tokens)) : undefined;
+  const tps = live?.tokensPerSecond != null ? formatTps(live.tokensPerSecond) : undefined;
+  return (
+    <View
+      style={styles.metrics}
+      accessibilityLabel={[
+        ttft ? `${t("metrics.ttft")} ${ttft}` : null,
+        tokens ? `${t("metrics.tokens")} ${tokens}` : null,
+        tps ? `${t("metrics.throughput")} ${tps}` : null,
+      ].filter(Boolean).join(" · ") || t("capture.starting")}
+    >
+      <MetricCell label={t("metrics.ttft")} value={dash(ttft)} />
+      <MetricCell label={t("metrics.tokens")} value={dash(tokens)} />
+      <MetricCell label={t("metrics.throughput")} value={dash(tps)} last />
+    </View>
+  );
+}
+
+function MetricCell({ label, value, last }: { label: string; value: string; last?: boolean }) {
+  const { theme } = useTheme();
+  const styles = makeStyles(theme);
+  return (
+    <View style={[styles.metricCell, !last && styles.metricCellBorder]}>
+      <Text style={styles.metricValue}>{value}</Text>
+      <Text style={styles.metricLabel}>{label}</Text>
+    </View>
+  );
+}
+
 interface ExtractionResultLocal {
   draft: ObservationDraft;
   question: string | null;
   inferMs: number;
+  stats?: InferSnapshot;
   sourceText: string;
 }
 
@@ -473,6 +532,12 @@ function makeStyles(theme: Theme) {
     user: { alignSelf: "flex-end", backgroundColor: color.primary },
     caption: { marginTop: space.xs },
     loadingRow: { flexDirection: "row", alignItems: "center", gap: space.sm },
+    loadingCard: { alignSelf: "stretch", maxWidth: "100%", gap: space.md, paddingVertical: space.md },
+    metrics: { flexDirection: "row", borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: color.border, paddingTop: space.sm },
+    metricCell: { flex: 1, alignItems: "center", gap: 2, paddingVertical: 2 },
+    metricCellBorder: { borderRightWidth: StyleSheet.hairlineWidth, borderRightColor: color.border },
+    metricValue: { ...theme.type.heading, fontSize: 20, lineHeight: 24, color: color.primary, fontVariant: ["tabular-nums"] },
+    metricLabel: { ...theme.type.caption, textTransform: "uppercase", letterSpacing: 0.4 },
     draftCard: { alignSelf: "stretch", padding: space.md, gap: space.md },
     equipment: { gap: space.sm, paddingTop: space.md, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: color.border },
     pair: { flexDirection: "row", gap: space.sm },

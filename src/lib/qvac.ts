@@ -8,6 +8,15 @@ import {
   HEALTHCARE_4B_MEDICAL_IQ3_XXS,
 } from "@qvac/sdk";
 import * as QvacSdk from "@qvac/sdk";
+import {
+  applyCompletionEvent,
+  emptyInferSnapshot,
+  mergeSdkStats,
+  type InferSnapshot,
+} from "./infer-metrics";
+
+export type { InferPhase, InferSnapshot } from "./infer-metrics";
+export { formatInferCaption, formatMs, formatTps } from "./infer-metrics";
 
 export const MODELS = {
   qwen: { src: QWEN3_600M_INST_Q4, name: "QWEN3_600M_INST_Q4" },
@@ -74,6 +83,7 @@ type QvacState = {
   modelId: string | null;
   loading: Promise<string> | null;
   lastInferMs: number | null;
+  lastInferStats: InferSnapshot | null;
   device: InferDevice | null;
   gpuFailed: boolean;
   deviceOverride: InferDevice | null;
@@ -101,6 +111,7 @@ const st = g.__baseiqQvac ?? (g.__baseiqQvac = {
   modelId: null,
   loading: null,
   lastInferMs: null,
+  lastInferStats: null,
   device: null,
   gpuFailed: false,
   deviceOverride: null,
@@ -124,6 +135,7 @@ st.translatorLoading ??= {};
 st.translatorFailed ??= {};
 st.lastTranslateMs ??= null;
 st.lastTranslateStats ??= null;
+st.lastInferStats ??= null;
 st.translatorTail ??= Promise.resolve();
 st.translatorInflight ??= 0;
 st.whisperId ??= null;
@@ -177,6 +189,7 @@ export function isBusy(): boolean {
   return st.inflight > 0 || st.loading !== null || st.translatorInflight > 0 || Object.keys(st.translatorLoading).length > 0 || st.whisperLoading !== null || st.visionLoading !== null;
 }
 export function getLastInferMs(): number | null { return st.lastInferMs; }
+export function getLastInferStats(): InferSnapshot | null { return st.lastInferStats; }
 export function getLastTranslateMs(): number | null { return st.lastTranslateMs; }
 export function getLastTranslateStats(): TranslateStats | null { return st.lastTranslateStats; }
 export function getDevice(): InferDevice | null { return st.device; }
@@ -429,39 +442,97 @@ export async function releaseUnusedTranslators(keepLang: string): Promise<void> 
   }
 }
 
-export async function inferJson(system: string, user: string, schema: object, timeoutMs = 45000): Promise<{ text: string; inferMs: number }> {
+type CompletionFinal = { contentText: string; stats?: unknown };
+type CompletionRun = {
+  events?: AsyncIterable<{ type?: unknown; text?: unknown; stats?: unknown }>;
+  tokenStream?: AsyncIterable<string>;
+  final: Promise<CompletionFinal>;
+};
+
+async function runStructuredCompletion(
+  id: string,
+  system: string,
+  user: string,
+  schema: object,
+  timeoutMs: number,
+  onProgress: ((snap: InferSnapshot) => void) | undefined,
+  t0: number,
+  imagePath?: string,
+): Promise<{ final: CompletionFinal; snap: InferSnapshot }> {
+  const userMsg = imagePath
+    ? { role: "user" as const, content: user, attachments: [{ path: imagePath }] }
+    : { role: "user" as const, content: user };
+  const run = completion({
+    modelId: id,
+    history: [
+      { role: "system", content: system },
+      userMsg,
+    ],
+    stream: true,
+    responseFormat: { type: "json_schema", json_schema: { name: "observation", schema: schema as Record<string, unknown> } },
+  }) as CompletionRun;
+
+  let snap = emptyInferSnapshot("decoding");
+  const emit = (next: InferSnapshot) => {
+    snap = { ...next, inferMs: Date.now() - t0 };
+    st.lastInferStats = snap;
+    onProgress?.(snap);
+  };
+  emit(snap);
+
+  const work = (async () => {
+    if (run.events) {
+      for await (const event of run.events) {
+        emit(applyCompletionEvent(snap, event, Date.now(), t0));
+      }
+    } else if (run.tokenStream) {
+      for await (const text of run.tokenStream) {
+        emit(applyCompletionEvent(snap, { type: "contentDelta", text }, Date.now(), t0));
+      }
+    }
+    return await run.final;
+  })();
+
+  try {
+    const final = await withTimeout(work, timeoutMs, "infer_timeout");
+    return { final, snap };
+  } catch (err) {
+    // ponytail: race no cancela el worker. Si el JSON llega tarde, úsalo; no lo tires.
+    const late = await run.final.then((v) => v, () => null);
+    if (late?.contentText?.trim()) {
+      console.warn(`▸ QVAC infer recovered after timeout (${Date.now() - t0}ms)`);
+      return { final: late, snap };
+    }
+    console.warn(`▸ QVAC infer_timeout after ${Date.now() - t0}ms`);
+    throw err;
+  }
+}
+
+function finishInfer(snap: InferSnapshot, final: CompletionFinal, inferMs: number, onProgress?: (s: InferSnapshot) => void): InferSnapshot {
+  const stats = mergeSdkStats({ ...snap, phase: "done" }, final.stats, inferMs);
+  st.lastInferMs = inferMs;
+  st.lastInferStats = stats;
+  onProgress?.(stats);
+  const tps = stats.tokensPerSecond != null ? stats.tokensPerSecond.toFixed(1) : "?";
+  console.log(`▸ QVAC infer ${inferMs}ms TTFT=${stats.ttftMs ?? "?"}ms tok=${stats.tokens ?? "?"} ${tps} tok/s`);
+  return stats;
+}
+
+export async function inferJson(
+  system: string,
+  user: string,
+  schema: object,
+  timeoutMs = 45000,
+  onProgress?: (snap: InferSnapshot) => void,
+): Promise<{ text: string; inferMs: number; stats: InferSnapshot }> {
   return withNativeLock(async () => {
     st.inflight += 1;
     const t0 = Date.now();
     try {
-      const complete = async (id: string) => {
-        const run = completion({
-          modelId: id,
-          history: [
-            { role: "system", content: system },
-            { role: "user", content: user },
-          ],
-          stream: false,
-          responseFormat: { type: "json_schema", json_schema: { name: "observation", schema: schema as Record<string, unknown> } },
-        });
-        try {
-          return await withTimeout(run.final, timeoutMs, "infer_timeout");
-        } catch (err) {
-          // ponytail: race no cancela el worker. Si el JSON llega tarde, úsalo; no lo tires.
-          const late = await run.final.then((v) => v, () => null);
-          if (late?.contentText?.trim()) {
-            console.warn(`▸ QVAC infer recovered after timeout (${Date.now() - t0}ms)`);
-            return late;
-          }
-          console.warn(`▸ QVAC infer_timeout after ${Date.now() - t0}ms`);
-          throw err;
-        }
-      };
-
       let id = await loadLlmLocked();
-      let final;
+      let result: { final: CompletionFinal; snap: InferSnapshot };
       try {
-        final = await complete(id);
+        result = await runStructuredCompletion(id, system, user, schema, timeoutMs, onProgress, t0);
       } catch (error) {
         if (st.device !== "gpu" || !isMissingModelError(error)) throw error;
         st.gpuFailed = true;
@@ -469,10 +540,11 @@ export async function inferJson(system: string, user: string, schema: object, ti
         st.loading = null;
         st.device = null;
         id = await loadLlmLocked();
-        final = await complete(id);
+        result = await runStructuredCompletion(id, system, user, schema, timeoutMs, onProgress, t0);
       }
-      st.lastInferMs = Date.now() - t0;
-      return { text: final.contentText, inferMs: st.lastInferMs };
+      const inferMs = Date.now() - t0;
+      const stats = finishInfer(result.snap, result.final, inferMs, onProgress);
+      return { text: result.final.contentText, inferMs, stats };
     } finally {
       st.inflight = Math.max(0, st.inflight - 1);
     }
@@ -559,33 +631,17 @@ export async function inferJsonWithImage(
   imagePath: string,
   schema: object,
   timeoutMs = 60000,
-): Promise<{ text: string; inferMs: number }> {
+  onProgress?: (snap: InferSnapshot) => void,
+): Promise<{ text: string; inferMs: number; stats: InferSnapshot }> {
   return withNativeLock(async () => {
     st.inflight += 1;
     const t0 = Date.now();
     try {
       const id = await loadVisionLocked();
-      const run = completion({
-        modelId: id,
-        history: [
-          { role: "system", content: system },
-          { role: "user", content: user, attachments: [{ path: imagePath }] },
-        ],
-        stream: false,
-        responseFormat: { type: "json_schema", json_schema: { name: "observation", schema: schema as Record<string, unknown> } },
-      });
-      try {
-        const final = await withTimeout(run.final, timeoutMs, "infer_timeout");
-        st.lastInferMs = Date.now() - t0;
-        return { text: final.contentText, inferMs: st.lastInferMs };
-      } catch (err) {
-        const late = await run.final.then((v) => v, () => null);
-        if (late?.contentText?.trim()) {
-          console.warn(`▸ QVAC vision infer recovered after timeout (${Date.now() - t0}ms)`);
-          return { text: late.contentText, inferMs: Date.now() - t0 };
-        }
-        throw err;
-      }
+      const result = await runStructuredCompletion(id, system, user, schema, timeoutMs, onProgress, t0, imagePath);
+      const inferMs = Date.now() - t0;
+      const stats = finishInfer(result.snap, result.final, inferMs, onProgress);
+      return { text: result.final.contentText, inferMs, stats };
     } finally {
       st.inflight = Math.max(0, st.inflight - 1);
     }

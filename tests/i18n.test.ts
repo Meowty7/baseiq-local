@@ -11,6 +11,9 @@ test("t() usa ES/EN escritos a mano y cae a EN si falta el idioma o la clave", (
   expect(t("no.such.key", "en")).toBe("no.such.key");
   expect(t("records.title", "en", { n: 3 })).toBe("Records (3)");
   expect(t("ai.ready", "es", { device: " · GPU" })).toBe("IA local lista · GPU");
+  expect(t("capture.inferCaption", "es", { detail: "0.9 s · TTFT 180 ms · 52 tok · 58.3 tok/s · GPU" }))
+    .toBe("Inferencia 0.9 s · TTFT 180 ms · 52 tok · 58.3 tok/s · GPU");
+  expect(t("metrics.throughput", "en")).toBe("tok/s");
 });
 
 test("diccionarios ES y EN tienen las mismas claves", () => {

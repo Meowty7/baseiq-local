@@ -22,8 +22,8 @@ try {
   }
   console.log("TRANSLATE PASS");
 
-  const { draft, question, inferMs, translateVia } = await extractObservation(SAMPLE, "es");
-  console.log(`model=${MODEL_NAME} inferMs=${inferMs} via=${translateVia}`);
+  const { draft, question, inferMs, stats, translateVia } = await extractObservation(SAMPLE, "es");
+  console.log(`model=${MODEL_NAME} inferMs=${inferMs} ttft=${stats.ttftMs ?? "?"}ms tok=${stats.tokens ?? "?"} tps=${stats.tokensPerSecond ?? "?"} via=${translateVia}`);
   console.log(JSON.stringify(draft, null, 2));
   console.log(`question=${question}`);
 
