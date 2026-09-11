@@ -2,12 +2,14 @@ import { useMemo, useState } from "react";
 import { Pressable, StyleSheet, Text, View } from "react-native";
 import { aggregate360, type Client360Row, type ObservationRecord } from "../../shared/observation";
 import { Card, Input, Row, SectionHeader, StatusText } from "../ui/primitives";
-import { MODALITY_LABELS, font, space, useTheme, type Theme } from "../ui/theme";
+import { font, space, useTheme, type Theme } from "../ui/theme";
+import { freshnessLabel, localeFor, modalityLabels, statusLabels, useI18n } from "../i18n";
 
 export function ClientInstalledBase({ observations, onViewClient }: {
   observations: ObservationRecord[]; onViewClient?: (client: string) => void;
 }) {
   const [query, setQuery] = useState("");
+  const { t } = useI18n();
 
   const byClient = useMemo(() => {
     const map = new Map<string, Client360Row[]>();
@@ -34,15 +36,15 @@ export function ClientInstalledBase({ observations, onViewClient }: {
 
   return (
     <View style={{ gap: 24 }}>
-      <Input value={query} onChangeText={setQuery} placeholder="Buscar por cliente o ciudad" />
+      <Input value={query} onChangeText={setQuery} placeholder={t("cib.search")} />
 
       <View>
-        <SectionHeader title={`Clientes (${byClient.length})`} />
+        <SectionHeader title={t("cib.clients", { n: byClient.length })} />
         <View style={{ gap: space.md }}>
           {observations.length === 0 ? (
-            <Card><Row label="Sin observaciones todavía. Captura la primera en la pestaña Capturar." last /></Card>
+            <Card><Row label={t("cib.empty")} last /></Card>
           ) : byClient.length === 0 ? (
-            <Card><Row label={`Sin resultados para “${query.trim()}”`} last /></Card>
+            <Card><Row label={t("cib.noResults", { query: query.trim() })} last /></Card>
           ) : (
             byClient.map(([client, list]) => (
               <ClientCard
@@ -64,21 +66,29 @@ function ClientCard({ client, list, observations, onViewClient }: {
   client: string; list: Client360Row[]; observations: ObservationRecord[]; onViewClient?: (client: string) => void;
 }) {
   const { theme } = useTheme();
+  const { t, lang } = useI18n();
   const styles = makeStyles(theme);
+  const labels = modalityLabels(lang);
+  const statuses = statusLabels(lang);
   const [expanded, setExpanded] = useState(false);
   const location = [list[0]?.city, list[0]?.country].filter(Boolean).join(", ");
   const newest = [...observations].sort((a, b) => b.id - a.id)[0];
   const n = observations.length;
-  const meta = [location, `${n} ${n === 1 ? "observación" : "observaciones"}`, newest ? `última ${formatWhen(newest)}` : null].filter(Boolean).join(" · ");
+  const displayClient = client === "Sin cliente" ? t("common.noClient") : client;
+  const meta = [
+    location,
+    `${n} ${n === 1 ? t("cib.observationOne") : t("cib.observationMany")}`,
+    newest ? t("cib.last", { when: formatWhen(newest, lang, t("cib.noDate")) }) : null,
+  ].filter(Boolean).join(" · ");
 
   return (
     <Card>
       <Pressable onPress={() => setExpanded(!expanded)} accessibilityRole="button" style={({ pressed }) => [styles.header, pressed && styles.pressed]}>
         <View style={styles.headerTop}>
-          <Text style={[theme.type.heading, styles.headerTitle]}>{client}</Text>
+          <Text style={[theme.type.heading, styles.headerTitle]}>{displayClient}</Text>
           {onViewClient && (
             <Pressable onPress={() => onViewClient(client)} accessibilityRole="button" hitSlop={8}>
-              <Text style={styles.footerText}>Ver registros ›</Text>
+              <Text style={styles.footerText}>{t("cib.viewRecords")}</Text>
             </Pressable>
           )}
         </View>
@@ -88,15 +98,15 @@ function ClientCard({ client, list, observations, onViewClient }: {
       {list.map((r, i) => (
         <View key={r.modality} style={[styles.row, i < list.length - 1 && styles.divider]}>
           <View style={styles.rowMain}>
-            <Text style={theme.type.body}>{`${r.quantity} × ${MODALITY_LABELS[r.modality] ?? r.modality}`}</Text>
-            <Text style={theme.type.secondary}>{`${r.ageRange ? `${r.ageRange} años` : "Antigüedad desconocida"} · ${r.freshness}`}</Text>
+            <Text style={theme.type.body}>{`${r.quantity} × ${labels[r.modality] ?? r.modality}`}</Text>
+            <Text style={theme.type.secondary}>{`${r.ageRange ? t("cib.ageYears", { n: r.ageRange }) : t("cib.ageUnknown")} · ${freshnessLabel(r.freshness, lang)}`}</Text>
           </View>
-          <StatusText label={r.confidence} tone={theme.statusColor[r.confidence] ?? theme.color.textTertiary} />
+          <StatusText label={statuses[r.confidence] ?? r.confidence} tone={theme.statusColor[r.confidence] ?? theme.color.textTertiary} />
         </View>
       ))}
 
       <Pressable onPress={() => setExpanded(!expanded)} accessibilityRole="button" style={({ pressed }) => [styles.footer, pressed && styles.pressed]}>
-        <Text style={styles.footerText}>{expanded ? "Ocultar observaciones" : `Ver observaciones (${n})`}</Text>
+        <Text style={styles.footerText}>{expanded ? t("cib.hideObservations") : t("cib.showObservations", { n })}</Text>
       </Pressable>
 
       {expanded && [...observations].sort((a, b) => b.id - a.id).map((o) => <ObservationBlock key={o.id} o={o} />)}
@@ -104,21 +114,24 @@ function ClientCard({ client, list, observations, onViewClient }: {
   );
 }
 
-function formatWhen(o: ObservationRecord): string {
+function formatWhen(o: ObservationRecord, lang: string, fallback: string): string {
   const raw = o.createdAt || o.observedAt;
-  if (!raw) return "sin fecha";
+  if (!raw) return fallback;
   const d = new Date(raw.includes("T") ? raw : `${raw}T12:00:00`);
   if (Number.isNaN(d.getTime())) return raw.slice(0, 10);
-  return d.toLocaleString("es", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
+  return d.toLocaleString(localeFor(lang), { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
 }
 
 function ObservationBlock({ o }: { o: ObservationRecord }) {
   const { theme } = useTheme();
+  const { t, lang } = useI18n();
   const styles = makeStyles(theme);
+  const labels = modalityLabels(lang);
+  const statuses = statusLabels(lang);
   const summary = o.equipment.map((e) => {
-    const label = e.modality ? MODALITY_LABELS[e.modality] ?? e.modality : "equipo";
+    const label = e.modality ? labels[e.modality] ?? e.modality : t("modality.equipo");
     const name = [label.charAt(0).toLowerCase() + label.slice(1), e.brand, e.model].filter(Boolean).join(" ");
-    return `${e.quantity ?? "?"} × ${name}${e.ageYears !== null ? ` · ${e.ageYears} años` : ""}`;
+    return `${e.quantity ?? "?"} × ${name}${e.ageYears !== null ? ` · ${t("cib.ageYears", { n: e.ageYears })}` : ""}`;
   }).join("; ");
   const evidence = o.equipment.map((e) => e.evidence).filter((v): v is string => !!v);
 
@@ -126,8 +139,8 @@ function ObservationBlock({ o }: { o: ObservationRecord }) {
     <View style={styles.observation}>
       <Text style={theme.type.body}>{summary}</Text>
       <Text style={theme.type.secondary}>
-        <Text style={{ color: theme.statusColor[o.status] ?? theme.color.textTertiary }}>{o.status}</Text>
-        {` · ${formatWhen(o)}${o.submittedBy ? ` · ${o.submittedBy}` : ""}${o.sourceType ? ` · ${o.sourceType}` : ""}`}
+        <Text style={{ color: theme.statusColor[o.status] ?? theme.color.textTertiary }}>{statuses[o.status] ?? o.status}</Text>
+        {` · ${formatWhen(o, lang, t("cib.noDate"))}${o.submittedBy ? ` · ${o.submittedBy}` : ""}${o.sourceType ? ` · ${t(`source.${o.sourceType}`)}` : ""}`}
       </Text>
       {evidence.map((q, i) => <Text key={i} style={[theme.type.secondary, styles.italic]}>“{q}”</Text>)}
       <Text style={theme.type.caption}>{o.sourceText}</Text>

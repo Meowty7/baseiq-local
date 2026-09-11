@@ -5,6 +5,7 @@ import type { OverviewResult } from "../lib/store";
 import { OverviewDashboard } from "./OverviewDashboard";
 import { ClientInstalledBase } from "./ClientInstalledBase";
 import { font, radius, space, useTheme, type Theme } from "../ui/theme";
+import { useI18n } from "../i18n";
 
 type Mode = "global" | "clientes";
 
@@ -12,6 +13,7 @@ export function InsightsTab({ overview, observations, onViewClient }: {
   overview: OverviewResult | null; observations: ObservationRecord[]; onViewClient?: (client: string) => void;
 }) {
   const { theme } = useTheme();
+  const { t } = useI18n();
   const styles = makeStyles(theme);
   const [mode, setMode] = useState<Mode>("global");
 
@@ -19,10 +21,10 @@ export function InsightsTab({ overview, observations, onViewClient }: {
     <ScrollView style={styles.screen} contentContainerStyle={styles.content}>
       <View style={styles.segment}>
         <Pressable style={[styles.segmentBtn, mode === "global" && styles.segmentBtnActive]} onPress={() => setMode("global")}>
-          <Text style={[styles.segmentText, mode === "global" && styles.segmentTextActive]}>Resumen</Text>
+          <Text style={[styles.segmentText, mode === "global" && styles.segmentTextActive]}>{t("insights.overview")}</Text>
         </Pressable>
         <Pressable style={[styles.segmentBtn, mode === "clientes" && styles.segmentBtnActive]} onPress={() => setMode("clientes")}>
-          <Text style={[styles.segmentText, mode === "clientes" && styles.segmentTextActive]}>Clientes</Text>
+          <Text style={[styles.segmentText, mode === "clientes" && styles.segmentTextActive]}>{t("insights.clients")}</Text>
         </Pressable>
       </View>
 

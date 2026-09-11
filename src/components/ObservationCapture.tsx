@@ -4,7 +4,8 @@ import { ActivityIndicator, Keyboard, KeyboardAvoidingView, Platform, Pressable,
 import { appendFollowUp, MODALITIES, type Modality, type ObservationDraft } from "../../shared/observation";
 import { type useStore, OBSERVATION_STATUSES, SOURCE_TYPES } from "../lib/store";
 import { Button, Card, Input, Select } from "../ui/primitives";
-import { MODALITY_LABELS, radius, space, useTheme, type Theme } from "../ui/theme";
+import { radius, space, useTheme, type Theme } from "../ui/theme";
+import { modalityLabels, statusLabels, useI18n } from "../i18n";
 
 type Store = ReturnType<typeof useStore>;
 
@@ -14,8 +15,7 @@ const EXAMPLES = [
   "Hospital Valle Serena en Madrid. Un tomógrafo Medtron de tres años y dos equipos de rayos X sin marca visible.",
 ];
 const EXAMPLE_LABELS: Record<string, string> = Object.fromEntries(EXAMPLES.map((e) => [e, `${e.slice(0, 40).trimEnd()}…`]));
-const SOURCE_LABELS: Record<string, string> = Object.fromEntries(SOURCE_TYPES.map((s) => [s, `Fuente: ${s}`]));
-const GREETING = "Cuéntame qué viste en la visita: hospital, ciudad, equipos, marcas, antigüedad.";
+const GREETING_KEY = "capture.greeting";
 
 interface Msg {
   id: string;
@@ -35,8 +35,14 @@ export interface ObservationCaptureHandle {
 export const ObservationCapture = forwardRef<ObservationCaptureHandle, { store: Store; onBusyChange?: (busy: boolean) => void }>(
   function ObservationCapture({ store, onBusyChange }, ref) {
   const { theme } = useTheme();
+  const { t, lang } = useI18n();
   const styles = makeStyles(theme);
-  const [messages, setMessages] = useState<Msg[]>(() => [msg("assistant", GREETING)]);
+  const labels = modalityLabels(lang);
+  const statuses = statusLabels(lang);
+  const sourceLabels: Record<string, string> = Object.fromEntries(
+    SOURCE_TYPES.map((s) => [s, t("source.prefix", { name: t(`source.${s}`) })]),
+  );
+  const [messages, setMessages] = useState<Msg[]>(() => [msg("assistant", t(GREETING_KEY))]);
   const [text, setText] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -58,6 +64,15 @@ export const ObservationCapture = forwardRef<ObservationCaptureHandle, { store: 
   useEffect(() => {
     onBusyChange?.(loading || saving);
   }, [loading, saving, onBusyChange]);
+
+  useEffect(() => {
+    setMessages((prev) => {
+      if (prev.length === 1 && prev[0].role === "assistant") {
+        return [msg("assistant", t(GREETING_KEY))];
+      }
+      return prev;
+    });
+  }, [t, lang]);
 
   useEffect(() => {
     // KeyboardAvoidingView shrinks itself by comparing its own bottom edge to the
@@ -120,15 +135,15 @@ export const ObservationCapture = forwardRef<ObservationCaptureHandle, { store: 
       setResult(res);
       setDraft(JSON.parse(JSON.stringify(res.draft)));
       const dev = getDevice()?.toUpperCase() ?? "?";
-      const items = [msg("assistant", "Esto es lo que entendí. Revisa y corrige lo necesario.", `Inferencia ${(res.inferMs / 1000).toFixed(1)} s · ${dev}`)];
+      const items = [msg("assistant", t("capture.understood"), t("capture.inferCaption", { sec: (res.inferMs / 1000).toFixed(1), device: dev }))];
       if (res.question) items.push(msg("assistant", res.question));
       push(...items);
     } catch (e) {
       const code = e instanceof Error ? e.message : "extract_failed";
       setError(
-        code === "infer_timeout" ? "La IA local tardó demasiado. Cierra la app y vuelve a abrirla (el worker GPU puede haber quedado ocupado)."
-          : code === "model_busy" ? "El modelo está ocupado. Espera un momento e inténtalo de nuevo."
-          : code === "load_timeout" ? "No se pudo cargar el modelo a tiempo. Reinicia la app."
+        code === "infer_timeout" ? t("capture.timeout")
+          : code === "model_busy" ? t("capture.busy")
+          : code === "load_timeout" ? t("capture.loadTimeout")
           : code,
       );
     } finally {
@@ -139,7 +154,7 @@ export const ObservationCapture = forwardRef<ObservationCaptureHandle, { store: 
   function confirm(nextStatus: (typeof OBSERVATION_STATUSES)[number]) {
     if (!draft || !result || saving) return;
     if (!draft.client) {
-      setError("Falta el cliente: complétalo antes de guardar.");
+      setError(t("capture.missingClient"));
       return;
     }
     setSaving(true);
@@ -162,9 +177,9 @@ export const ObservationCapture = forwardRef<ObservationCaptureHandle, { store: 
       setError(null);
       setSaved(true);
       const summary = draft.equipment
-        .map((e) => `${e.quantity ?? "?"} × ${MODALITY_LABELS[e.modality ?? ""] ?? e.modality ?? "equipo"}`)
+        .map((e) => `${e.quantity ?? "?"} × ${labels[e.modality ?? ""] ?? e.modality ?? t("modality.equipo")}`)
         .join(", ");
-      push(msg("assistant", `Guardada · ${draft.client} · ${summary || "sin equipos"} · ${nextStatus}.`));
+      push(msg("assistant", t("capture.saved", { client: draft.client, summary: summary || t("capture.noEquipment"), status: statuses[nextStatus] ?? nextStatus })));
     } catch (e) {
       setError(e instanceof Error ? e.message : "save_failed");
     } finally {
@@ -183,7 +198,7 @@ export const ObservationCapture = forwardRef<ObservationCaptureHandle, { store: 
   }
 
   function reset() {
-    setMessages([msg("assistant", GREETING)]);
+    setMessages([msg("assistant", t(GREETING_KEY))]);
     setResult(null);
     setDraft(null);
     setError(null);
@@ -221,9 +236,9 @@ export const ObservationCapture = forwardRef<ObservationCaptureHandle, { store: 
           <View style={[styles.bubble, styles.assistant, styles.loadingRow]}>
             <ActivityIndicator color={theme.color.textSecondary} />
             <View style={{ flex: 1, gap: 2 }}>
-              <Text style={theme.type.body}>Extrayendo con IA local…</Text>
+              <Text style={theme.type.body}>{t("capture.extracting")}</Text>
               <Text style={theme.type.caption}>
-                {elapsedSec > 0 ? `${elapsedSec} s transcurridos` : "Iniciando…"}
+                {elapsedSec > 0 ? t("capture.elapsed", { n: elapsedSec }) : t("capture.starting")}
                 {getDevice() ? ` · ${getDevice()?.toUpperCase()}` : ""}
               </Text>
             </View>
@@ -233,23 +248,23 @@ export const ObservationCapture = forwardRef<ObservationCaptureHandle, { store: 
         {result && draft && (
           <>
             <Card style={styles.draftCard}>
-              <Input label="Cliente (requerido)" value={draft.client ?? ""} onChangeText={(v) => setDraft({ ...draft, client: v })} placeholder="Hospital o clínica" />
+              <Input label={t("capture.client")} value={draft.client ?? ""} onChangeText={(v) => setDraft({ ...draft, client: v })} placeholder={t("capture.clientPlaceholder")} />
               <View style={styles.pair}>
-                <Input style={styles.half} label="Ciudad" value={draft.city ?? ""} onChangeText={(v) => setDraft({ ...draft, city: v || null })} />
-                <Input style={styles.half} label="País" value={draft.country ?? ""} onChangeText={(v) => setDraft({ ...draft, country: v || null })} />
+                <Input style={styles.half} label={t("capture.city")} value={draft.city ?? ""} onChangeText={(v) => setDraft({ ...draft, city: v || null })} />
+                <Input style={styles.half} label={t("capture.country")} value={draft.country ?? ""} onChangeText={(v) => setDraft({ ...draft, country: v || null })} />
               </View>
 
               {draft.equipment.map((eq, i) => (
                 <View key={i} style={styles.equipment}>
-                  <Text style={theme.type.heading}>Equipo {i + 1}</Text>
-                  <Select label="Modalidad" value={(eq.modality ?? "otra") as Modality} options={MODALITIES} labels={MODALITY_LABELS} onChange={(v) => updateEquipment(i, "modality", v)} />
+                  <Text style={theme.type.heading}>{t("capture.equipmentN", { n: i + 1 })}</Text>
+                  <Select label={t("capture.modality")} value={(eq.modality ?? "otra") as Modality} options={MODALITIES} labels={labels} onChange={(v) => updateEquipment(i, "modality", v)} placeholder={t("select.placeholder")} />
                   <View style={styles.pair}>
-                    <Input style={styles.half} label="Cantidad" keyboardType="numeric" value={eq.quantity == null ? "" : String(eq.quantity)} onChangeText={(v) => updateEquipment(i, "quantity", toInt(v))} />
-                    <Input style={styles.half} label="Antigüedad (años)" keyboardType="numeric" value={eq.ageYears == null ? "" : String(eq.ageYears)} onChangeText={(v) => updateEquipment(i, "ageYears", toInt(v))} />
+                    <Input style={styles.half} label={t("capture.quantity")} keyboardType="numeric" value={eq.quantity == null ? "" : String(eq.quantity)} onChangeText={(v) => updateEquipment(i, "quantity", toInt(v))} />
+                    <Input style={styles.half} label={t("capture.age")} keyboardType="numeric" value={eq.ageYears == null ? "" : String(eq.ageYears)} onChangeText={(v) => updateEquipment(i, "ageYears", toInt(v))} />
                   </View>
                   <View style={styles.pair}>
-                    <Input style={styles.half} label="Marca" value={eq.brand ?? ""} onChangeText={(v) => updateEquipment(i, "brand", v || null)} />
-                    <Input style={styles.half} label="Modelo" value={eq.model ?? ""} onChangeText={(v) => updateEquipment(i, "model", v || null)} />
+                    <Input style={styles.half} label={t("capture.brand")} value={eq.brand ?? ""} onChangeText={(v) => updateEquipment(i, "brand", v || null)} />
+                    <Input style={styles.half} label={t("capture.model")} value={eq.model ?? ""} onChangeText={(v) => updateEquipment(i, "model", v || null)} />
                   </View>
                   {eq.evidence ? <Text style={styles.evidence}>“{eq.evidence}”</Text> : null}
                 </View>
@@ -259,14 +274,14 @@ export const ObservationCapture = forwardRef<ObservationCaptureHandle, { store: 
             <View style={[styles.bubble, styles.assistant, { gap: space.md }]}>
               <Text style={theme.type.body}>
                 {awaitingAnswer
-                  ? "Responde la pregunta de arriba antes de guardar (o sáltala si no tienes ese dato)."
-                  : "Cuando esté correcto, elige el estado y guarda."}
+                  ? t("capture.answerFirst")
+                  : t("capture.readyToSave")}
               </Text>
-              <Select label="Estado" value={status} options={OBSERVATION_STATUSES} onChange={setStatus} />
-              <Button label="Guardar observación" onPress={() => confirm(status)} loading={saving} disabled={awaitingAnswer} />
+              <Select label={t("capture.status")} value={status} options={OBSERVATION_STATUSES} labels={statuses} onChange={setStatus} placeholder={t("select.placeholder")} />
+              <Button label={t("capture.save")} onPress={() => confirm(status)} loading={saving} disabled={awaitingAnswer} />
               {awaitingAnswer && (
                 <Pressable onPress={() => setQuestionSkipped(true)} accessibilityRole="button" hitSlop={8}>
-                  <Text style={styles.link}>Omitir pregunta y guardar de todos modos</Text>
+                  <Text style={styles.link}>{t("capture.skipQuestion")}</Text>
                 </Pressable>
               )}
             </View>
@@ -279,21 +294,21 @@ export const ObservationCapture = forwardRef<ObservationCaptureHandle, { store: 
           </View>
         )}
 
-        {saved && <Button label="Nueva observación" variant="secondary" onPress={reset} style={styles.newBtn} />}
+        {saved && <Button label={t("capture.new")} variant="secondary" onPress={reset} style={styles.newBtn} />}
       </ScrollView>
 
       <View style={[styles.composer, androidKeyboardHeight > 0 && { paddingBottom: androidKeyboardHeight }]}>
         <View style={styles.pair}>
-          <Select style={styles.half} value={null} options={EXAMPLES} labels={EXAMPLE_LABELS} placeholder="Ejemplos" onChange={setText} />
-          <Select style={styles.half} value={sourceType} options={SOURCE_TYPES} labels={SOURCE_LABELS} onChange={setSourceType} />
+          <Select style={styles.half} value={null} options={EXAMPLES} labels={EXAMPLE_LABELS} placeholder={t("capture.examples")} onChange={setText} />
+          <Select style={styles.half} value={sourceType} options={SOURCE_TYPES} labels={sourceLabels} onChange={setSourceType} placeholder={t("select.placeholder")} />
         </View>
         <Pressable onPress={() => setShowDetails((s) => !s)} accessibilityRole="button" accessibilityState={{ expanded: showDetails }} hitSlop={8}>
-          <Text style={styles.link}>{showDetails ? "Ocultar detalles" : "Detalles"}</Text>
+          <Text style={styles.link}>{showDetails ? t("capture.hideDetails") : t("capture.details")}</Text>
         </Pressable>
         {showDetails && (
           <View style={styles.pair}>
-            <Input style={styles.half} label="Quién observó" value={submittedBy} onChangeText={setSubmittedBy} placeholder="Nombre" />
-            <Input style={styles.half} label="Fecha (AAAA-MM-DD)" value={observedAt} onChangeText={setObservedAt} placeholder="AAAA-MM-DD" />
+            <Input style={styles.half} label={t("capture.observer")} value={submittedBy} onChangeText={setSubmittedBy} placeholder={t("capture.observerPlaceholder")} />
+            <Input style={styles.half} label={t("capture.date")} value={observedAt} onChangeText={setObservedAt} placeholder={t("capture.datePlaceholder")} />
           </View>
         )}
         <View style={styles.sendRow}>
@@ -303,9 +318,9 @@ export const ObservationCapture = forwardRef<ObservationCaptureHandle, { store: 
             onChangeText={setText}
             multiline
             inputStyle={styles.composerInput}
-            placeholder={awaitingAnswer ? "Responde aquí…" : "Escribe lo que viste…"}
+            placeholder={awaitingAnswer ? t("capture.placeholderMore") : t("capture.placeholder")}
           />
-          <Button label="Enviar" onPress={awaitingAnswer ? answerFollowUp : extract} disabled={!canSend} style={styles.sendBtn} />
+          <Button label={t("capture.send")} onPress={awaitingAnswer ? answerFollowUp : extract} disabled={!canSend} style={styles.sendBtn} />
         </View>
       </View>
     </KeyboardAvoidingView>
