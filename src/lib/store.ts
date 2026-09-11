@@ -4,7 +4,7 @@ import {
   getDb, listObservations, saveObservation,
   updateObservation, updateObservationClient, updateEquipment, deleteObservation,
 } from "./db";
-import { ensureModel, isReady, isBusy, getLastInferMs, getDevice, setDeviceOverride, MODEL_NAME } from "./qvac";
+import { ensureModel, ensureTranslator, isReady, isBusy, getLastInferMs, getDevice, setDeviceOverride, MODEL_NAME } from "./qvac";
 import { extractObservation } from "./extraction";
 import {
   OBSERVATION_STATUSES, SOURCE_TYPES, freshness, detectConflicts, normalizeDraft,
@@ -107,7 +107,10 @@ export function useStore() {
         const raw = (await FileSystem.readAsStringAsync(flag).catch(() => "")).trim().toLowerCase();
         if (raw === "cpu" || raw === "gpu") setDeviceOverride(raw);
         seedIfEmpty();
-        await ensureModel((pct) => setProgress(pct));
+        await Promise.all([
+          ensureModel((pct) => setProgress(pct)),
+          ensureTranslator(),
+        ]);
         setProgress(null);
         refresh();
       } catch (err) {

@@ -1,5 +1,5 @@
 import { EXTRACTION_SCHEMA, normalizeDraft, nextQuestion, groundDraft, toEnglishObservation, type ObservationDraft } from "../../shared/observation";
-import { inferJson } from "./qvac";
+import { inferJson, isTranslatorReady, translateEsEn } from "./qvac";
 
 const SYSTEM =
   "Extract inventory. JSON only. No invent. Absent field = null. Keep original names. " +
@@ -8,21 +8,44 @@ const SYSTEM =
   'in: I saw CT at Saint Jude  out: {"client":"Saint Jude","city":null,"country":null,"equipment":[{"modality":"CT","quantity":1,"brand":null,"model":null,"ageYears":null,"evidence":"I saw CT"}],"missing":["city","country","brand","model","ageYears"]} ' +
   "/no_think";
 
+export type TranslateVia = "nmt" | "regex";
+
+export function pickObservationEnglish(source: string, nmt: string | null | undefined): { english: string; via: TranslateVia } {
+  const trimmed = (nmt ?? "").trim();
+  if (trimmed) return { english: trimmed.slice(0, 800), via: "nmt" };
+  return { english: toEnglishObservation(source).slice(0, 800), via: "regex" };
+}
+
+export async function resolveObservationEnglish(
+  text: string,
+  opts?: { english?: string; force?: TranslateVia },
+): Promise<{ english: string; via: TranslateVia }> {
+  if (opts?.english) return pickObservationEnglish(text, opts.english);
+  if (opts?.force === "regex") return pickObservationEnglish(text, null);
+  if (opts?.force === "nmt" || isTranslatorReady()) {
+    return pickObservationEnglish(text, await translateEsEn(text));
+  }
+  return pickObservationEnglish(text, null);
+}
+
 function retryableInferError(err: unknown): boolean {
   if (!(err instanceof Error)) return false;
   if (err.message === "infer_timeout" || err.message === "model_busy" || err.message === "load_timeout") return false;
   return err instanceof SyntaxError;
 }
 
-export async function extractObservation(text: string): Promise<{ draft: ObservationDraft; question: string | null; inferMs: number }> {
+export async function extractObservation(
+  text: string,
+  opts?: { english?: string; force?: TranslateVia },
+): Promise<{ draft: ObservationDraft; question: string | null; inferMs: number; english: string; translateVia: TranslateVia }> {
   let lastError: unknown = null;
-  const english = toEnglishObservation(text).slice(0, 800);
+  const { english, via } = await resolveObservationEnglish(text, opts);
   for (let attempt = 0; attempt < 2; attempt++) {
     try {
       const { text: raw, inferMs } = await inferJson(SYSTEM, english, EXTRACTION_SCHEMA);
       const draft = groundDraft(normalizeDraft(JSON.parse(raw.trim())), text, english);
       draft.missing = computeMissing(draft);
-      return { draft, question: nextQuestion(draft), inferMs };
+      return { draft, question: nextQuestion(draft), inferMs, english, translateVia: via };
     } catch (err) {
       lastError = err;
       if (err instanceof Error) console.warn(`extract attempt ${attempt + 1} failed: ${err.message}`);

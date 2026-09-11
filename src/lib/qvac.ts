@@ -1,9 +1,10 @@
 import {
-  loadModel, completion, unloadModel,
+  loadModel, completion, unloadModel, translate,
   QWEN3_600M_INST_Q4, LLAMA_3_2_1B_INST_Q4_0, HEALTHCARE_1_7B_MEDICAL_IQ3_XXS,
   QWEN3_1_7B_INST_Q4, SMOLLM2_360M_INST_Q8, SALAMANDRATA_2B_INST_Q4,
   LLAMA_TOOL_CALLING_1B_INST_Q4_K, QWEN3_5_0_8B_MULTIMODAL_Q4_K_M,
   HEALTHCARE_4B_MEDICAL_IQ3_XXS,
+  BERGAMOT_ES_EN,
 } from "@qvac/sdk";
 
 export const MODELS = {
@@ -19,6 +20,9 @@ export const MODELS = {
 } as const;
 export type ModelKey = keyof typeof MODELS;
 
+export const TRANSLATOR_SRC = BERGAMOT_ES_EN;
+export const TRANSLATOR_NAME = "BERGAMOT_ES_EN";
+
 function pick(key?: string) {
   const fallback = defaultModelKey();
   return MODELS[(key ?? process.env.QVAC_MODEL ?? fallback).toLowerCase() as ModelKey] ?? MODELS[fallback];
@@ -30,21 +34,43 @@ export let MODEL_NAME = selected.name;
 
 export type InferDevice = "gpu" | "cpu";
 
+export type TranslateStats = {
+  totalTokens?: number;
+  totalTime?: number;
+  decodeTime?: number;
+  TPS?: number;
+  TTFT?: number;
+  [key: string]: unknown;
+};
+
+export type TranslateBatchResult = {
+  translations: string[];
+  stats: TranslateStats | null;
+  ms: number;
+};
+
+type QvacState = {
+  modelId: string | null;
+  loading: Promise<string> | null;
+  lastInferMs: number | null;
+  device: InferDevice | null;
+  gpuFailed: boolean;
+  deviceOverride: InferDevice | null;
+  tail: Promise<void>;
+  inflight: number;
+  translatorId: string | null;
+  translatorLoading: Promise<string> | null;
+  translatorFailed: boolean;
+  lastTranslateMs: number | null;
+  lastTranslateStats: TranslateStats | null;
+  translatorTail: Promise<void>;
+  translatorInflight: number;
+};
+
 // ponytail: Fast Refresh (bun run start) reinicia este módulo y modelId queda null,
 // pero en Android el worker GPU sigue vivo (QVAC-19304). Recargar el modelo encima
 // satura Adreno/Mali y la inferencia deja de terminar. El singleton sobrevive al HMR.
-const g = globalThis as typeof globalThis & {
-  __baseiqQvac?: {
-    modelId: string | null;
-    loading: Promise<string> | null;
-    lastInferMs: number | null;
-    device: InferDevice | null;
-    gpuFailed: boolean;
-    deviceOverride: InferDevice | null;
-    tail: Promise<void>;
-    inflight: number;
-  };
-};
+const g = globalThis as typeof globalThis & { __baseiqQvac?: QvacState };
 const st = g.__baseiqQvac ?? (g.__baseiqQvac = {
   modelId: null,
   loading: null,
@@ -54,10 +80,24 @@ const st = g.__baseiqQvac ?? (g.__baseiqQvac = {
   deviceOverride: null,
   tail: Promise.resolve(),
   inflight: 0,
+  translatorId: null,
+  translatorLoading: null,
+  translatorFailed: false,
+  lastTranslateMs: null,
+  lastTranslateStats: null,
+  translatorTail: Promise.resolve(),
+  translatorInflight: 0,
 });
+st.translatorId ??= null;
+st.translatorLoading ??= null;
+st.translatorFailed ??= false;
+st.lastTranslateMs ??= null;
+st.lastTranslateStats ??= null;
+st.translatorTail ??= Promise.resolve();
+st.translatorInflight ??= 0;
 
 export async function switchModel(key: string): Promise<void> {
-  await shutdown();
+  await shutdownLlm();
   st.gpuFailed = false;
   selected = pick(key);
   MODEL_SRC = selected.src;
@@ -69,8 +109,13 @@ export function setDeviceOverride(d: InferDevice | null): void {
 }
 
 export function isReady(): boolean { return st.modelId !== null; }
-export function isBusy(): boolean { return st.inflight > 0 || st.loading !== null; }
+export function isTranslatorReady(): boolean { return st.translatorId !== null; }
+export function isBusy(): boolean {
+  return st.inflight > 0 || st.loading !== null || st.translatorInflight > 0 || st.translatorLoading !== null;
+}
 export function getLastInferMs(): number | null { return st.lastInferMs; }
+export function getLastTranslateMs(): number | null { return st.lastTranslateMs; }
+export function getLastTranslateStats(): TranslateStats | null { return st.lastTranslateStats; }
 export function getDevice(): InferDevice | null { return st.device; }
 
 export function isMissingModelError(error: unknown): boolean {
@@ -150,6 +195,118 @@ export function ensureModel(onProgress?: (pct: number) => void): Promise<string>
   return st.loading;
 }
 
+export function ensureTranslator(): Promise<string | null> {
+  if (st.translatorId) return Promise.resolve(st.translatorId);
+  if (st.translatorFailed && !st.translatorLoading) return Promise.resolve(null);
+  if (!st.translatorLoading) {
+    st.translatorLoading = (async () => {
+      const id = await withTimeout(
+        loadModel({
+          modelSrc: TRANSLATOR_SRC,
+          modelType: "nmt",
+          modelConfig: { engine: "Bergamot", from: "es", to: "en" },
+        } as unknown as Parameters<typeof loadModel>[0]),
+        120000,
+        "load_timeout",
+      );
+      console.log(`▸ QVAC translator=${TRANSLATOR_NAME} device=cpu`);
+      return id;
+    })().then((id) => {
+      st.translatorId = id;
+      st.translatorLoading = null;
+      return id;
+    }).catch((err) => {
+      st.translatorFailed = true;
+      st.translatorLoading = null;
+      console.warn(`▸ QVAC translator load failed, falling back to regex:`, err instanceof Error ? err.message : err);
+      throw err;
+    });
+  }
+  return st.translatorLoading.catch(() => null);
+}
+
+function normalizeTranslateStats(stats: TranslateStats | null | undefined): TranslateStats | null {
+  if (!stats) return null;
+  return {
+    ...stats,
+    TPS: typeof stats.TPS === "number" ? stats.TPS : typeof stats.tokensPerSecond === "number" ? stats.tokensPerSecond : undefined,
+    TTFT: typeof stats.TTFT === "number" ? stats.TTFT : typeof stats.timeToFirstToken === "number" ? stats.timeToFirstToken : undefined,
+  };
+}
+
+async function runTranslate(id: string, text: string | string[], timeoutMs: number) {
+  // NMT: from/to van en loadModel(modelConfig), no en translate(). Extra keys rompen el schema.
+  const run = translate({
+    modelId: id,
+    text,
+    modelType: "nmtcpp-translation",
+    stream: false,
+  });
+  try {
+    const [translated, translations, stats] = await withTimeout(
+      Promise.all([
+        run.text,
+        run.translations,
+        run.stats.catch(() => undefined),
+      ]),
+      timeoutMs,
+      "translate_timeout",
+    );
+    return { translated, translations, stats: normalizeTranslateStats((stats as TranslateStats | undefined) ?? null) };
+  } catch (err) {
+    await Promise.all([run.text.catch(() => {}), run.translations.catch(() => {}), run.stats.catch(() => {})]);
+    throw err;
+  }
+}
+
+async function withTranslatorQueue<T>(fn: (id: string) => Promise<T>): Promise<T | null> {
+  const id = await ensureTranslator();
+  if (!id) return null;
+  const prev = st.translatorTail;
+  let release!: () => void;
+  st.translatorTail = new Promise<void>((r) => { release = r; });
+  await prev;
+  st.translatorInflight += 1;
+  try {
+    return await fn(id);
+  } catch (err) {
+    console.warn(`▸ QVAC translate failed:`, err instanceof Error ? err.message : err);
+    return null;
+  } finally {
+    st.translatorInflight = Math.max(0, st.translatorInflight - 1);
+    release();
+  }
+}
+
+export async function translateEsEn(text: string, timeoutMs = 15000): Promise<string | null> {
+  const t0 = Date.now();
+  const out = await withTranslatorQueue(async (id) => {
+    const result = await runTranslate(id, text, timeoutMs);
+    const value = (result.translated ?? result.translations?.[0] ?? "").trim();
+    if (!value) return null;
+    st.lastTranslateMs = Date.now() - t0;
+    st.lastTranslateStats = result.stats;
+    return value;
+  });
+  return out;
+}
+
+export async function translateEsEnBatch(texts: string[], timeoutMs = 60000): Promise<TranslateBatchResult | null> {
+  if (texts.length === 0) return { translations: [], stats: null, ms: 0 };
+  const t0 = Date.now();
+  return withTranslatorQueue(async (id) => {
+    const result = await runTranslate(id, texts, timeoutMs);
+    const translations = (result.translations ?? []).map((t) => (t ?? "").trim());
+    if (translations.length !== texts.length || translations.some((t) => !t)) {
+      throw new Error("translate_batch_mismatch");
+    }
+    const ms = Date.now() - t0;
+    st.lastTranslateMs = ms;
+    st.lastTranslateStats = result.stats;
+    return { translations, stats: result.stats, ms };
+  });
+}
+
 export async function inferJson(system: string, user: string, schema: object, timeoutMs = 45000): Promise<{ text: string; inferMs: number }> {
   const prev = st.tail;
   let release!: () => void;
@@ -199,10 +356,22 @@ export async function inferJson(system: string, user: string, schema: object, ti
   }
 }
 
-export async function shutdown(): Promise<void> {
+async function shutdownLlm(): Promise<void> {
   if (!st.modelId) return;
   if (isAndroid()) return;
   await unloadModel({ modelId: st.modelId }).catch(() => {});
   st.modelId = null;
   st.device = null;
+}
+
+async function shutdownTranslator(): Promise<void> {
+  if (!st.translatorId) return;
+  if (isAndroid()) return;
+  await unloadModel({ modelId: st.translatorId }).catch(() => {});
+  st.translatorId = null;
+}
+
+export async function shutdown(): Promise<void> {
+  await shutdownLlm();
+  await shutdownTranslator();
 }

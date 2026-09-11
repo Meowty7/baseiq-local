@@ -25,6 +25,7 @@ ios/
 *.tsbuildinfo
 .playwright-mcp/
 package-lock.json
+qvac/worker.bundle.entry.mjs
 
 # Editor directories and files
 .vscode/*
