@@ -1,75 +1,124 @@
-import { useState } from "react";
-import { Pressable, StyleSheet, Text, View } from "react-native";
+import { Fragment, useState } from "react";
+import { StyleSheet, Text, View } from "react-native";
 import type { ObservationRecord } from "../../shared/observation";
 import type { OverviewResult } from "../lib/store";
+import { Card, Row, SectionHeader } from "../ui/primitives";
+import { MODALITY_LABELS, color, space, type } from "../ui/theme";
 
-const MODALITY_LABELS: Record<string, string> = {
-  resonador: "Resonadores",
-  tomografo: "Tomógrafos",
-  ecografo: "Ecógrafos",
-  "rayos-x": "Rayos X",
-  mamografo: "Mamógrafos",
-  otra: "Otros",
-};
+const modalityLabel = (m: string | null | undefined) => (m ? MODALITY_LABELS[m] ?? m : "Equipo");
 
-function maxOf(entries: [string, number][]): number {
-  return Math.max(1, ...entries.map(([, n]) => n));
+function summarize(o: ObservationRecord): string {
+  if (o.equipment.length === 0) return "Sin equipos en esta nota";
+  return o.equipment.map((e) => `${e.quantity ?? "?"} × ${modalityLabel(e.modality)}`).join(", ");
+}
+
+function when(o: ObservationRecord): string {
+  const raw = o.createdAt || o.observedAt;
+  if (!raw) return "";
+  const d = new Date(raw.includes("T") ? raw : `${raw}T12:00:00`);
+  if (Number.isNaN(d.getTime())) return raw.slice(0, 10);
+  return d.toLocaleString("es", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
 }
 
 export function OverviewDashboard({ overview, observations }: { overview: OverviewResult | null; observations: ObservationRecord[] }) {
-  if (!overview) return <View style={styles.card}><Text style={styles.h2}>Resumen global</Text><Text style={styles.muted}>Cargando…</Text></View>;
+  if (!overview) {
+    return (
+      <View style={{ gap: space.xl }}>
+        <Card><Row label="Cargando resumen…" last /></Card>
+      </View>
+    );
+  }
 
+  const recent = [...observations].sort((a, b) => b.id - a.id).slice(0, 8);
   const geoTree = buildGeoTree(observations);
   const modEntries = Object.entries(overview.byModality);
-  const max = maxOf(modEntries);
+  const issueCount = overview.conflicts.length + overview.duplicates.length;
+
+  const groups: { title: string; items: { label: string; detail: string }[] }[] = [
+    {
+      title: "Renovación",
+      items: overview.renewals.map((r) => ({
+        label: `${r.client} · ${modalityLabel(r.modality)}`,
+        detail: `Equipo ${[r.brand, r.model].filter(Boolean).join(" ") || "sin marca ni modelo"} con ${r.ageYears ?? "?"} años; candidato a renovación`,
+      })),
+    },
+    {
+      title: "Conflictos",
+      items: overview.conflicts.map((c) => ({ label: `${c.client} · ${modalityLabel(c.modality)}`, detail: c.detail })),
+    },
+    {
+      title: "Duplicados",
+      items: overview.duplicates.map((d) => ({ label: "Posible duplicado", detail: d })),
+    },
+  ].filter((g) => g.items.length > 0);
 
   return (
-    <View style={styles.card}>
-      <Text style={styles.h2}>Resumen global</Text>
-      <Text style={styles.stat}>{overview.observations} observaciones · {overview.fieldsUnknown} campos por verificar</Text>
+    <View style={{ gap: space.xl }}>
+      <View>
+        <SectionHeader title="Recientes" />
+        <Card>
+          {recent.length === 0 ? <Row label="Aún no hay observaciones guardadas." last /> : (
+            recent.map((o, i) => (
+              <Row
+                key={o.id}
+                label={o.client ?? "Sin cliente"}
+                detail={summarize(o)}
+                value={when(o)}
+                last={i === recent.length - 1}
+              />
+            ))
+          )}
+        </Card>
+      </View>
 
-      <Text style={styles.h3}>Por modalidad</Text>
-      {modEntries.map(([k, n]) => (
-        <View key={k} style={styles.barRow}>
-          <Text style={styles.barLabel}>{MODALITY_LABELS[k] ?? k}</Text>
-          <View style={styles.barTrack}>
-            <View style={[styles.barFill, { width: `${(n / max) * 100}%` }]} />
-          </View>
-          <Text style={styles.barNum}>{n}</Text>
+      <View>
+        <SectionHeader title="Pendientes" />
+        <Card>
+          <Row label="Campos por verificar" value={String(overview.fieldsUnknown)} valueColor={overview.fieldsUnknown > 0 ? color.warn : undefined} />
+          <Row label="Equipos a renovar (7 años o más)" value={String(overview.renewals.length)} valueColor={overview.renewals.length > 0 ? color.warn : undefined} />
+          <Row label="Conflictos y duplicados" value={String(issueCount)} valueColor={issueCount > 0 ? color.danger : undefined} />
+          <Row label="Observaciones registradas" value={String(overview.observations)} last />
+        </Card>
+      </View>
+
+      {groups.length > 0 && (
+        <View>
+          <SectionHeader title="Requiere atención" />
+          <Card>
+            {groups.map((g, gi) => (
+              <Fragment key={g.title}>
+                {groups.length > 1 && <Text style={styles.groupLabel}>{g.title}</Text>}
+                {g.items.map((it, i) => (
+                  <Row key={`${g.title}-${i}`} label={it.label} detail={it.detail} last={gi === groups.length - 1 && i === g.items.length - 1} />
+                ))}
+              </Fragment>
+            ))}
+          </Card>
         </View>
-      ))}
-
-      <Text style={styles.h3}>Mapa geográfico</Text>
-      {geoTree.length === 0 ? <Text style={styles.muted}>Sin datos geográficos.</Text> : (
-        geoTree.map((g) => <GeoNode key={g.country} label={`${g.country} (${g.total} obs.)`} level={0} />)
       )}
 
-      <Text style={styles.h3}>Oportunidades de renovación <Text style={styles.mutedSmall}>(≥ 7 años)</Text></Text>
-      {overview.renewals.length === 0 ? <Text style={styles.muted}>Sin equipos en edad de renovación.</Text> : (
-        overview.renewals.map((r, i) => (
-          <Text key={i} style={styles.renewItem}>
-            {r.client} · {r.modality ?? "equipo"}{r.brand ? ` ${r.brand}` : ""}{r.model ? ` ${r.model}` : ""} · {r.ageYears} años
-          </Text>
-        ))
-      )}
+      <View>
+        <SectionHeader title="Equipos por modalidad" />
+        <Card>
+          {modEntries.length === 0 ? <Row label="Sin equipos todavía" last /> : (
+            modEntries.map(([k, n], i) => <Row key={k} label={MODALITY_LABELS[k] ?? k} value={String(n)} last={i === modEntries.length - 1} />)
+          )}
+        </Card>
+      </View>
 
-      <Text style={styles.h3}>Frescura de datos</Text>
-      {overview.stale.length === 0 ? <Text style={styles.muted}>Todo verificado recientemente.</Text> : (
-        overview.stale.map((s, i) => <Text key={i} style={styles.question}>{s}</Text>)
-      )}
-
-      <Text style={styles.h3}>Conflictos <Text style={styles.mutedSmall}>(no se fusionan solos)</Text></Text>
-      {overview.conflicts.length === 0 ? <Text style={styles.muted}>Sin observaciones contradictorias.</Text> : (
-        overview.conflicts.map((c, i) => (
-          <Text key={i} style={styles.question}>{c.client} · {c.modality}: {c.detail} ({c.dates.join(" / ")})</Text>
-        ))
-      )}
-      {overview.duplicates.map((d, i) => <Text key={`d${i}`} style={styles.question}>Posible duplicado: {d}</Text>)}
+      <View>
+        <SectionHeader title="Por país" />
+        <Card>
+          {geoTree.length === 0 ? <Row label="Sin datos geográficos" last /> : (
+            geoTree.map((g, i) => <GeoNode key={g.country} node={g} last={i === geoTree.length - 1} />)
+          )}
+        </Card>
+      </View>
     </View>
   );
 }
 
-interface GeoNodeData { country: string; total: number; cities: { city: string; total: number; clients: { client: string; n: number }[] }[] }
+interface GeoNodeData { country: string; total: number; cities: { city: string; clients: { client: string; n: number }[] }[] }
 
 function buildGeoTree(obs: ObservationRecord[]): GeoNodeData[] {
   const tree = new Map<string, Map<string, Map<string, number>>>();
@@ -92,31 +141,21 @@ function buildGeoTree(obs: ObservationRecord[]): GeoNodeData[] {
   })).map((g) => ({ ...g, total: g.cities.reduce((a, c) => a + c.clients.reduce((b, cl) => b + cl.n, 0), 0) }));
 }
 
-function GeoNode({ label, level }: { label: string; level: number }) {
-  const [expanded, setExpanded] = useState(level < 1);
+function GeoNode({ node, last }: { node: GeoNodeData; last: boolean }) {
+  const [expanded, setExpanded] = useState(false);
   return (
-    <Pressable onPress={() => setExpanded(!expanded)} style={{ marginLeft: level * 12 }}>
-      <Text style={styles.geoNode}>{expanded ? "▼ " : "▶ "}{label}</Text>
-    </Pressable>
+    <>
+      <Row label={node.country} value={`${node.total} obs.`} onPress={() => setExpanded(!expanded)} last={last && !expanded} />
+      {expanded && node.cities.map((c, i) => (
+        <View key={c.city} style={styles.cityIndent}>
+          <Row label={c.city} detail={c.clients.map((cl) => `${cl.client} (${cl.n})`).join(", ")} last={last && i === node.cities.length - 1} />
+        </View>
+      ))}
+    </>
   );
 }
 
-const BORDER = "#2A2A33";
-const CARD_BG = "#121219";
-
 const styles = StyleSheet.create({
-  card: { backgroundColor: CARD_BG, borderRadius: 12, padding: 16, gap: 10 },
-  h2: { color: "#fff", fontSize: 18, fontWeight: "600" },
-  h3: { color: "#fff", fontSize: 14, fontWeight: "600", marginTop: 4 },
-  stat: { color: "#A7A7B3", fontSize: 13 },
-  muted: { color: "#7E7E8A", fontSize: 12 },
-  mutedSmall: { color: "#7E7E8A", fontSize: 11, fontWeight: "400" },
-  barRow: { flexDirection: "row", alignItems: "center", gap: 8 },
-  barLabel: { color: "#A7A7B3", fontSize: 12, width: 80 },
-  barTrack: { flex: 1, height: 8, backgroundColor: "#0B0B0F", borderRadius: 4, overflow: "hidden" },
-  barFill: { height: "100%", backgroundColor: "#2B2BFF", borderRadius: 4 },
-  barNum: { color: "#fff", fontSize: 12, fontWeight: "600", width: 24 },
-  geoNode: { color: "#A7A7B3", fontSize: 12, paddingVertical: 4 },
-  renewItem: { color: "#A7A7B3", fontSize: 12, paddingVertical: 2 },
-  question: { color: "#FBBF24", fontSize: 12, paddingVertical: 2 },
+  groupLabel: { ...type.caption, paddingHorizontal: space.lg, paddingTop: space.md, paddingBottom: space.xs },
+  cityIndent: { paddingLeft: space.lg },
 });

@@ -1,10 +1,10 @@
 import { useCallback, useEffect, useState } from "react";
 import * as FileSystem from "expo-file-system";
-import { getDb, listObservations, saveObservation, clearAll } from "./db";
+import { getDb, listObservations, saveObservation } from "./db";
 import { ensureModel, isReady, isBusy, getLastInferMs, getDevice, setDeviceOverride, MODEL_NAME } from "./qvac";
 import { extractObservation } from "./extraction";
 import {
-  OBSERVATION_STATUSES, SOURCE_TYPES, freshness, detectConflicts, groundDraft, normalizeDraft, toEnglishObservation,
+  OBSERVATION_STATUSES, SOURCE_TYPES, freshness, detectConflicts, normalizeDraft,
   type ObservationDraft, type ObservationRecord, type ObservationStatus,
 } from "../../shared/observation";
 import fixtures from "../../fixtures/observations.es.json";
@@ -77,32 +77,22 @@ export function useStore() {
     setStatus((s) => ({ ...s, ready: isReady(), busy: isBusy(), lastInferMs: getLastInferMs(), device: getDevice() }));
   }, []);
 
-  const seedIfEmpty = useCallback(async () => {
+  const seedIfEmpty = useCallback(() => {
     const db = getDb();
-    const list = listObservations(db);
-    if (list.length > 0) return;
-    const times: number[] = [];
-    for (const fx of fixtures as { text: string; expect: { client: string | null; city: string | null; country: string | null; modalities: string[] } }[]) {
-      try {
-        const { draft, inferMs } = await extractObservation(fx.text);
-        times.push(inferMs);
-        console.log(`BENCH device=${getDevice()} n=${times.length} inferMs=${inferMs}`);
-        const client = draft.client ?? fx.expect.client;
-        if (!client) continue;
-        saveObservation(db, {
-          client, city: draft.city ?? fx.expect.city, country: draft.country ?? fx.expect.country,
-          status: "Reportado", sourceText: fx.text,
-          submittedBy: "seed", observedAt: "2026-09-01", sourceType: "visita", comments: null, confirmedAt: null,
-        }, draft.equipment);
-      } catch (err) {
-        console.error("seed failed:", fx.text.slice(0, 40), err);
-      }
-    }
-    if (times.length) {
-      const sorted = [...times].sort((a, b) => a - b);
-      const mean = Math.round(times.reduce((s, t) => s + t, 0) / times.length);
-      const p50 = sorted[Math.floor(sorted.length / 2)];
-      console.log(`BENCH AVG device=${getDevice()} n=${times.length} mean=${mean}ms p50=${p50}ms`);
+    if (listObservations(db).length > 0) return;
+    // Seed desde expect, sin inferencia: 12 llamadas al modelo al arrancar
+    // calentaban y trababan la GPU del Poco (8–10s → timeout / hang).
+    for (const fx of fixtures as unknown as { text: string; expect: { client: string | null; city: string | null; country: string | null; modalities: string[]; quantities?: Record<string, number> } }[]) {
+      const client = fx.expect.client;
+      if (!client) continue;
+      saveObservation(db, {
+        client, city: fx.expect.city, country: fx.expect.country,
+        status: "Reportado", sourceText: fx.text,
+        submittedBy: "seed", observedAt: "2026-09-01", sourceType: "visita", comments: null, confirmedAt: null,
+      }, fx.expect.modalities.map((m) => ({
+        modality: m, quantity: fx.expect.quantities?.[m] ?? 1,
+        brand: null, model: null, ageYears: null, evidence: null,
+      })));
     }
     refresh();
   }, [refresh]);
@@ -113,11 +103,10 @@ export function useStore() {
         const flag = `${FileSystem.documentDirectory}qvac.device`;
         const raw = (await FileSystem.readAsStringAsync(flag).catch(() => "")).trim().toLowerCase();
         if (raw === "cpu" || raw === "gpu") setDeviceOverride(raw);
-        if (raw === "cpu" || raw === "gpu") clearAll(getDb());
+        seedIfEmpty();
         await ensureModel((pct) => setProgress(pct));
         setProgress(null);
         refresh();
-        await seedIfEmpty();
       } catch (err) {
         console.error("model preload failed:", err);
       }
@@ -136,19 +125,21 @@ export function useStore() {
     submittedBy: string | null; observedAt: string | null; sourceType: string | null; comments: string | null;
   }): number => {
     const db = getDb();
-    const reGrounded = groundDraft(normalizeDraft({
+    // Lo revisado en el chat se guarda tal cual. Re-blindar aquí pisaba cantidad/modalidad
+    // (p. ej. 200 resonadores) y dejaba la observación sin equipos en el 360.
+    const draft = normalizeDraft({
       client: input.client.trim(),
       city: input.city, country: input.country,
       equipment: input.equipment, missing: [],
-    }), input.sourceText, toEnglishObservation(input.sourceText));
+    });
     const id = saveObservation(db, {
-      client: reGrounded.client ?? input.client.trim(),
-      city: input.city, country: input.country,
+      client: draft.client ?? input.client.trim(),
+      city: draft.city, country: draft.country,
       status: input.status, sourceText: input.sourceText,
       submittedBy: input.submittedBy, observedAt: input.observedAt,
       sourceType: input.sourceType, comments: input.comments,
       confirmedAt: input.status === "Confirmado" ? new Date().toISOString() : null,
-    }, reGrounded.equipment);
+    }, draft.equipment);
     refresh();
     return id;
   }, [refresh]);

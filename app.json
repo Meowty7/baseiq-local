@@ -4,7 +4,7 @@
     "slug": "baseiq-local",
     "version": "0.1.0",
     "orientation": "portrait",
-    "userInterfaceStyle": "dark",
+    "userInterfaceStyle": "light",
     "newArchEnabled": true,
     "android": {
       "package": "dev.belta.baseiq",

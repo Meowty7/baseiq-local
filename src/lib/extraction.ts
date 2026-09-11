@@ -8,9 +8,15 @@ const SYSTEM =
   'in: I saw CT at Saint Jude  out: {"client":"Saint Jude","city":null,"country":null,"equipment":[{"modality":"CT","quantity":1,"brand":null,"model":null,"ageYears":null,"evidence":"I saw CT"}],"missing":["city","country","brand","model","ageYears"]} ' +
   "/no_think";
 
+function retryableInferError(err: unknown): boolean {
+  if (!(err instanceof Error)) return false;
+  if (err.message === "infer_timeout" || err.message === "model_busy" || err.message === "load_timeout") return false;
+  return err instanceof SyntaxError;
+}
+
 export async function extractObservation(text: string): Promise<{ draft: ObservationDraft; question: string | null; inferMs: number }> {
   let lastError: unknown = null;
-  const english = toEnglishObservation(text).slice(0, 2000);
+  const english = toEnglishObservation(text).slice(0, 800);
   for (let attempt = 0; attempt < 2; attempt++) {
     try {
       const { text: raw, inferMs } = await inferJson(SYSTEM, english, EXTRACTION_SCHEMA);
@@ -19,6 +25,8 @@ export async function extractObservation(text: string): Promise<{ draft: Observa
       return { draft, question: nextQuestion(draft), inferMs };
     } catch (err) {
       lastError = err;
+      if (err instanceof Error) console.warn(`extract attempt ${attempt + 1} failed: ${err.message}`);
+      if (!retryableInferError(err)) break;
     }
   }
   throw lastError instanceof Error ? lastError : new Error("infer_failed");

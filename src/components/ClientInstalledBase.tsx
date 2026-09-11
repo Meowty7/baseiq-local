@@ -1,125 +1,127 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { Pressable, StyleSheet, Text, View } from "react-native";
-import { aggregate360, type ObservationRecord } from "../../shared/observation";
-
-const MODALITY_LABELS: Record<string, string> = {
-  resonador: "Resonadores",
-  tomografo: "Tomógrafos",
-  ecografo: "Ecógrafos",
-  "rayos-x": "Rayos X",
-  mamografo: "Mamógrafos",
-  otra: "Otros",
-};
-
-const STATUS_COLORS: Record<string, string> = {
-  Confirmado: "#22C55E",
-  Reportado: "#3B82F6",
-  Estimado: "#FBBF24",
-  Desconocido: "#7E7E8A",
-};
+import { aggregate360, type Client360Row, type ObservationRecord } from "../../shared/observation";
+import { Card, Input, Row, SectionHeader, StatusText } from "../ui/primitives";
+import { MODALITY_LABELS, STATUS_COLOR, color, font, space, type } from "../ui/theme";
 
 export function ClientInstalledBase({ observations }: { observations: ObservationRecord[] }) {
-  const rows = aggregate360(observations);
-  const byClient = new Map<string, typeof rows>();
-  for (const r of rows) {
-    const list = byClient.get(r.client) ?? [];
-    list.push(r);
-    byClient.set(r.client, list);
-  }
-  const entries = [...byClient.entries()];
+  const [query, setQuery] = useState("");
+
+  const byClient = useMemo(() => {
+    const map = new Map<string, Client360Row[]>();
+    for (const r of aggregate360(observations)) {
+      const list = map.get(r.client) ?? [];
+      list.push(r);
+      map.set(r.client, list);
+    }
+    const q = query.trim().toLowerCase();
+    const seen = new Set<string>();
+    const order: string[] = [];
+    for (const o of observations) {
+      const name = o.client ?? "Sin cliente";
+      if (!seen.has(name)) { seen.add(name); order.push(name); }
+    }
+    return order
+      .filter((client) => {
+        const list = map.get(client);
+        if (!list) return false;
+        return !q || client.toLowerCase().includes(q) || list.some((r) => (r.city ?? "").toLowerCase().includes(q));
+      })
+      .map((client) => [client, map.get(client)!] as const);
+  }, [observations, query]);
 
   return (
-    <View style={styles.card}>
-      <Text style={styles.h2}>Customer 360 — base instalada</Text>
-      {rows.length === 0 ? (
-        <Text style={styles.muted}>Sin observaciones todavía. Captura la primera arriba.</Text>
-      ) : (
-        entries.map(([client, list]) => (
-          <ClientBlock key={client} client={client} list={list} observations={observations} />
-        ))
-      )}
+    <View style={{ gap: 24 }}>
+      <Input value={query} onChangeText={setQuery} placeholder="Buscar por cliente o ciudad" />
+
+      <View>
+        <SectionHeader title={`Clientes (${byClient.length})`} />
+        <View style={{ gap: space.md }}>
+          {observations.length === 0 ? (
+            <Card><Row label="Sin observaciones todavía. Captura la primera en la pestaña Capturar." last /></Card>
+          ) : byClient.length === 0 ? (
+            <Card><Row label={`Sin resultados para “${query.trim()}”`} last /></Card>
+          ) : (
+            byClient.map(([client, list]) => (
+              <ClientCard key={client} client={client} list={list} observations={observations.filter((o) => o.client === client)} />
+            ))
+          )}
+        </View>
+      </View>
     </View>
   );
 }
 
-function ClientBlock({ client, list, observations }: { client: string; list: ReturnType<typeof aggregate360>; observations: ObservationRecord[] }) {
+function ClientCard({ client, list, observations }: { client: string; list: Client360Row[]; observations: ObservationRecord[] }) {
   const [expanded, setExpanded] = useState(false);
-  const obs = observations.filter((o) => o.client === client);
-  const loc = [list[0]?.city, list[0]?.country].filter(Boolean).join(", ");
+  const location = [list[0]?.city, list[0]?.country].filter(Boolean).join(", ");
+  const newest = [...observations].sort((a, b) => b.id - a.id)[0];
+  const n = observations.length;
+  const meta = [location, `${n} ${n === 1 ? "observación" : "observaciones"}`, newest ? `última ${formatWhen(newest)}` : null].filter(Boolean).join(" · ");
 
   return (
-    <View style={styles.clientBlock}>
-      <Pressable onPress={() => setExpanded(!expanded)}>
-        <Text style={styles.h3}>{client} <Text style={styles.muted}>{loc ? `· ${loc}` : ""}</Text></Text>
+    <Card>
+      <Pressable onPress={() => setExpanded(!expanded)} accessibilityRole="button" style={({ pressed }) => [styles.header, pressed && styles.pressed]}>
+        <Text style={type.heading}>{client}</Text>
+        <Text style={type.secondary}>{meta}</Text>
       </Pressable>
 
-      <View style={styles.tableHeader}>
-        <Text style={[styles.th, { flex: 1.5 }]}>Modalidad</Text>
-        <Text style={styles.th}>Cant.</Text>
-        <Text style={styles.th}>Edad</Text>
-        <Text style={styles.th}>Conf.</Text>
-        <Text style={styles.th}>Fres.</Text>
-      </View>
-
       {list.map((r, i) => (
-        <View key={i} style={styles.tableRow}>
-          <Text style={[styles.td, { flex: 1.5 }]}>{MODALITY_LABELS[r.modality] ?? r.modality}</Text>
-          <Text style={styles.td}>{r.quantity}</Text>
-          <Text style={styles.td}>{r.ageRange ?? "—"}</Text>
-          <Text style={[styles.td, { color: STATUS_COLORS[r.confidence] ?? "#7E7E8A" }]}>{r.confidence}</Text>
-          <Text style={styles.td}>{r.freshness}</Text>
+        <View key={r.modality} style={[styles.row, i < list.length - 1 && styles.divider]}>
+          <View style={styles.rowMain}>
+            <Text style={type.body}>{`${r.quantity} × ${MODALITY_LABELS[r.modality] ?? r.modality}`}</Text>
+            <Text style={type.secondary}>{`${r.ageRange ? `${r.ageRange} años` : "Antigüedad desconocida"} · ${r.freshness}`}</Text>
+          </View>
+          <StatusText label={r.confidence} tone={STATUS_COLOR[r.confidence] ?? color.textTertiary} />
         </View>
       ))}
 
-      {expanded && (
-        <View style={styles.obsList}>
-          {obs.map((o) => (
-            <View key={o.id} style={styles.obsItem}>
-              <Text style={styles.obsEquip}>
-                {o.equipment.map((e) => `${e.quantity ?? "?"}× ${e.modality ?? "equipo"}${e.brand ? ` ${e.brand}` : ""}${e.model ? ` ${e.model}` : ""}${e.ageYears !== null ? ` · ${e.ageYears} años` : ""}`).join("; ")}
-              </Text>
-              <Text style={[styles.obsStatus, { color: STATUS_COLORS[o.status] ?? "#7E7E8A" }]}>{o.status}</Text>
-              <Text style={styles.obsMeta}>{o.observedAt ?? o.createdAt.slice(0, 10)}{o.submittedBy ? ` · ${o.submittedBy}` : ""}{o.sourceType ? ` · ${o.sourceType}` : ""}</Text>
-              {o.equipment.some((e) => e.evidence) && (
-                <View style={styles.evidenceList}>
-                  {o.equipment.filter((e) => e.evidence).map((e, i) => (
-                    <Text key={i} style={styles.evidence}>"{e.evidence}"</Text>
-                  ))}
-                </View>
-              )}
-              <Text style={styles.source}>{o.sourceText}</Text>
-            </View>
-          ))}
-        </View>
-      )}
-
-      <Pressable onPress={() => setExpanded(!expanded)}>
-        <Text style={styles.expandToggle}>{expanded ? "▲ Colapsar" : `▼ Observaciones individuales (${obs.length})`}</Text>
+      <Pressable onPress={() => setExpanded(!expanded)} accessibilityRole="button" style={({ pressed }) => [styles.footer, pressed && styles.pressed]}>
+        <Text style={styles.footerText}>{expanded ? "Ocultar observaciones" : `Ver observaciones (${n})`}</Text>
       </Pressable>
+
+      {expanded && [...observations].sort((a, b) => b.id - a.id).map((o) => <ObservationBlock key={o.id} o={o} />)}
+    </Card>
+  );
+}
+
+function formatWhen(o: ObservationRecord): string {
+  const raw = o.createdAt || o.observedAt;
+  if (!raw) return "sin fecha";
+  const d = new Date(raw.includes("T") ? raw : `${raw}T12:00:00`);
+  if (Number.isNaN(d.getTime())) return raw.slice(0, 10);
+  return d.toLocaleString("es", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
+}
+
+function ObservationBlock({ o }: { o: ObservationRecord }) {
+  const summary = o.equipment.map((e) => {
+    const label = e.modality ? MODALITY_LABELS[e.modality] ?? e.modality : "equipo";
+    const name = [label.charAt(0).toLowerCase() + label.slice(1), e.brand, e.model].filter(Boolean).join(" ");
+    return `${e.quantity ?? "?"} × ${name}${e.ageYears !== null ? ` · ${e.ageYears} años` : ""}`;
+  }).join("; ");
+  const evidence = o.equipment.map((e) => e.evidence).filter((v): v is string => !!v);
+
+  return (
+    <View style={styles.observation}>
+      <Text style={type.body}>{summary}</Text>
+      <Text style={type.secondary}>
+        <Text style={{ color: STATUS_COLOR[o.status] ?? color.textTertiary }}>{o.status}</Text>
+        {` · ${formatWhen(o)}${o.submittedBy ? ` · ${o.submittedBy}` : ""}${o.sourceType ? ` · ${o.sourceType}` : ""}`}
+      </Text>
+      {evidence.map((q, i) => <Text key={i} style={[type.secondary, styles.italic]}>“{q}”</Text>)}
+      <Text style={type.caption}>{o.sourceText}</Text>
     </View>
   );
 }
 
-const BORDER = "#2A2A33";
-const CARD_BG = "#121219";
-
 const styles = StyleSheet.create({
-  card: { backgroundColor: CARD_BG, borderRadius: 12, padding: 16, gap: 12 },
-  h2: { color: "#fff", fontSize: 18, fontWeight: "600" },
-  h3: { color: "#fff", fontSize: 15, fontWeight: "600" },
-  muted: { color: "#7E7E8A", fontSize: 12, fontWeight: "400" },
-  clientBlock: { backgroundColor: "#0B0B0F", borderRadius: 8, padding: 12, gap: 6 },
-  tableHeader: { flexDirection: "row", paddingVertical: 4, borderBottomWidth: 1, borderBottomColor: BORDER },
-  th: { color: "#7E7E8A", fontSize: 10, flex: 1, textTransform: "uppercase" },
-  tableRow: { flexDirection: "row", paddingVertical: 6, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: BORDER },
-  td: { color: "#A7A7B3", fontSize: 12, flex: 1 },
-  obsList: { gap: 8, marginTop: 8, paddingTop: 8, borderTopWidth: 1, borderTopColor: BORDER },
-  obsItem: { gap: 2 },
-  obsEquip: { color: "#A7A7B3", fontSize: 12 },
-  obsStatus: { fontSize: 11, fontWeight: "600" },
-  obsMeta: { color: "#555", fontSize: 10 },
-  evidenceList: { gap: 2, marginTop: 2 },
-  evidence: { color: "#7E7E8A", fontSize: 10, fontStyle: "italic" },
-  source: { color: "#555", fontSize: 10, marginTop: 2 },
-  expandToggle: { color: "#2B2BFF", fontSize: 11, marginTop: 4 },
+  header: { padding: space.lg, gap: 2, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: color.border },
+  row: { flexDirection: "row", alignItems: "center", gap: space.md, paddingHorizontal: space.lg, paddingVertical: 13 },
+  rowMain: { flex: 1, gap: 2 },
+  divider: { borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: color.border },
+  footer: { paddingHorizontal: space.lg, paddingVertical: 13, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: color.border },
+  footerText: { fontFamily: font.medium, fontSize: 13, color: color.link },
+  observation: { padding: space.lg, gap: space.xs, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: color.border },
+  italic: { fontStyle: "italic" },
+  pressed: { opacity: 0.6 },
 });

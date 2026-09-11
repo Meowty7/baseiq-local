@@ -1,0 +1,122 @@
+[
+  {
+    "id": "rio-blanco-lima",
+    "kind": "correct",
+    "text": "Estoy en Hospital Río Blanco, en Lima, Perú. Vi dos tomógrafos Scanwell y un ecógrafo.",
+    "expect": { "client": "Hospital Río Blanco", "city": "Lima", "country": "Perú", "modalities": ["tomografo", "ecografo"], "quantities": { "tomografo": 2, "ecografo": 1 } }
+  },
+  {
+    "id": "nube-alta-medellin",
+    "kind": "correct",
+    "text": "Clínica Nube Alta, Medellín, Colombia. Un resonador Imagix, modelo IX-4, de unos seis años.",
+    "expect": { "client": "Clínica Nube Alta", "city": "Medellín", "country": "Colombia", "modalities": ["resonador"], "quantities": { "resonador": 1 } }
+  },
+  {
+    "id": "pino-alto-panama",
+    "kind": "correct",
+    "text": "Estoy en Hospital Pino Alto, en Panamá. Vi un resonador Medtron y un equipo de rayos X.",
+    "expect": { "client": "Hospital Pino Alto", "city": null, "country": "Panamá", "modalities": ["resonador", "rayos-x"], "quantities": { "resonador": 1, "rayos-x": 1 } }
+  },
+  {
+    "id": "roble-alto-santiago",
+    "kind": "correct",
+    "text": "Visité la Clínica Roble Alto en Santiago de Chile: dos tomógrafos Imagix, uno de unos siete años.",
+    "expect": { "client": "Clínica Roble Alto", "city": "Santiago de Chile", "country": "Chile", "modalities": ["tomografo"], "quantities": { "tomografo": 2 } }
+  },
+  {
+    "id": "sol-naciente-gdl",
+    "kind": "correct",
+    "text": "Centro Médico Sol Naciente, Guadalajara, México. Un mamógrafo Novascan de 2019 y dos equipos de rayos X.",
+    "expect": { "client": "Centro Médico Sol Naciente", "city": "Guadalajara", "country": "México", "modalities": ["mamografo", "rayos-x"], "quantities": { "mamografo": 1, "rayos-x": 2 } }
+  },
+  {
+    "id": "bahia-clara-sanjose",
+    "kind": "correct",
+    "text": "Hospital Bahía Clara, San José, Costa Rica. Un ecógrafo portátil, no sé la marca, parece nuevo.",
+    "expect": { "client": "Hospital Bahía Clara", "city": "San José", "country": "Costa Rica", "modalities": ["ecografo"], "quantities": { "ecografo": 1 } }
+  },
+  {
+    "id": "saint-jude-leak",
+    "kind": "incorrect",
+    "text": "Estoy en Hospital Cerro Norte, Quito. Vi un tomógrafo y dos ecógrafos, no sé las marcas.",
+    "expect": { "client": "Hospital Cerro Norte", "city": "Quito", "country": null, "modalities": ["tomografo", "ecografo"], "quantities": { "tomografo": 1, "ecografo": 2 } }
+  },
+  {
+    "id": "poli-arequipa",
+    "kind": "incorrect",
+    "text": "En la policlínica de Arequipa, Perú, hay dos mamógrafos Imagix de unos seis años.",
+    "expect": { "client": null, "city": "Arequipa", "country": "Perú", "modalities": ["mamografo"], "quantities": { "mamografo": 2 } }
+  },
+  {
+    "id": "brand-invent-bait",
+    "kind": "incorrect",
+    "text": "Hospital Paso Ancho, Cali. Un resonador de unos cuatro años, sin marca visible.",
+    "expect": { "client": "Hospital Paso Ancho", "city": "Cali", "country": null, "modalities": ["resonador"], "quantities": { "resonador": 1 } }
+  },
+  {
+    "id": "brand-wrong-mod",
+    "kind": "incorrect",
+    "text": "Hospital Coral Norte en Barcelona. Un tomógrafo Radiall de cinco años y tres ecógrafos sin marca visible.",
+    "expect": { "client": "Hospital Coral Norte", "city": "Barcelona", "country": null, "modalities": ["tomografo", "ecografo"], "quantities": { "tomografo": 1, "ecografo": 3 } }
+  },
+  {
+    "id": "country-only-ecuador",
+    "kind": "incorrect",
+    "text": "Hospital Mirasol Andino, en Ecuador. Un mamógrafo de unos dos años.",
+    "expect": { "client": "Hospital Mirasol Andino", "city": null, "country": "Ecuador", "modalities": ["mamografo"], "quantities": { "mamografo": 1 } }
+  },
+  {
+    "id": "no-facility",
+    "kind": "incorrect",
+    "text": "En Bogotá vi tres tomógrafos y un resonador viejo, como de diez años.",
+    "expect": { "client": null, "city": "Bogotá", "country": null, "modalities": ["tomografo", "resonador"], "quantities": { "tomografo": 3, "resonador": 1 } }
+  },
+  {
+    "id": "typos-clinica-tinene",
+    "kind": "incorrect",
+    "text": "Estoy en la Cl[inica Horizonte Sur en lima, tinene 4 ecografos Sonocare, parece de 2017",
+    "expect": { "client": "Clinica Horizonte Sur", "city": "Lima", "country": null, "modalities": ["ecografo"], "quantities": { "ecografo": 4 } }
+  },
+  {
+    "id": "followup-novascan",
+    "kind": "incorrect",
+    "text": "Hospital Delta Este, Córdoba. Un ecógrafo, no sé la marca.\nRespuesta: Es Novascan, de tres años.",
+    "expect": { "client": "Hospital Delta Este", "city": "Córdoba", "country": null, "modalities": ["ecografo"], "quantities": { "ecografo": 1 } }
+  },
+  {
+    "id": "once-qty-gap",
+    "kind": "incorrect",
+    "text": "Hospital Duna Roja, Temuco. Tienen once tomógrafos y un mamógrafo.",
+    "expect": { "client": "Hospital Duna Roja", "city": "Temuco", "country": null, "modalities": ["tomografo", "mamografo"], "quantities": { "tomografo": 11, "mamografo": 1 } }
+  },
+  {
+    "id": "no-equipment",
+    "kind": "incorrect",
+    "text": "Estuve en Hospital Nube Gris, Cartagena, Colombia. No vi equipos de imagen, solo la sala de espera.",
+    "expect": { "client": "Hospital Nube Gris", "city": "Cartagena", "country": "Colombia", "modalities": [], "quantities": {} }
+  },
+  {
+    "id": "varios-uncountable",
+    "kind": "incorrect",
+    "text": "Centro Médico Alba Sur, Tijuana. Un resonador Scanwell y varios equipos de rayos X, sin más detalles.",
+    "expect": { "client": "Centro Médico Alba Sur", "city": "Tijuana", "country": null, "modalities": ["resonador", "rayos-x"], "quantities": { "resonador": 1, "rayos-x": null } }
+  },
+  {
+    "id": "sala-piso-not-qty",
+    "kind": "incorrect",
+    "text": "Clínica Puerto Claro, Barranquilla. En la sala 12 del piso 3 hay 2 ecógrafos; el anexo es 4455.",
+    "expect": { "client": "Clínica Puerto Claro", "city": "Barranquilla", "country": null, "modalities": ["ecografo"], "quantities": { "ecografo": 2 } }
+  },
+  {
+    "id": "kawa-kyoto",
+    "kind": "correct",
+    "text": "Hospital Kawa Norte, Kyoto, Japón. Un tomógrafo Scanwell.",
+    "expect": { "client": "Hospital Kawa Norte", "city": "Kyoto", "country": "Japón", "modalities": ["tomografo"], "quantities": { "tomografo": 1 } }
+  },
+  {
+    "id": "luz-roja-lyon",
+    "kind": "correct",
+    "text": "Estoy en Clínica Luz Roja, en Lyon, Francia. Vi un resonador.",
+    "expect": { "client": "Clínica Luz Roja", "city": "Lyon", "country": "Francia", "modalities": ["resonador"], "quantities": { "resonador": 1 } }
+  }
+]

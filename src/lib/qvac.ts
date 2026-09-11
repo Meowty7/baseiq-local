@@ -28,32 +28,50 @@ let selected = pick();
 export let MODEL_SRC = selected.src;
 export let MODEL_NAME = selected.name;
 
+export type InferDevice = "gpu" | "cpu";
+
+// ponytail: Fast Refresh (bun run start) reinicia este módulo y modelId queda null,
+// pero en Android el worker GPU sigue vivo (QVAC-19304). Recargar el modelo encima
+// satura Adreno/Mali y la inferencia deja de terminar. El singleton sobrevive al HMR.
+const g = globalThis as typeof globalThis & {
+  __baseiqQvac?: {
+    modelId: string | null;
+    loading: Promise<string> | null;
+    lastInferMs: number | null;
+    device: InferDevice | null;
+    gpuFailed: boolean;
+    deviceOverride: InferDevice | null;
+    tail: Promise<void>;
+    inflight: number;
+  };
+};
+const st = g.__baseiqQvac ?? (g.__baseiqQvac = {
+  modelId: null,
+  loading: null,
+  lastInferMs: null,
+  device: null,
+  gpuFailed: false,
+  deviceOverride: null,
+  tail: Promise.resolve(),
+  inflight: 0,
+});
+
 export async function switchModel(key: string): Promise<void> {
   await shutdown();
-  gpuFailed = false;
+  st.gpuFailed = false;
   selected = pick(key);
   MODEL_SRC = selected.src;
   MODEL_NAME = selected.name;
 }
 
-export type InferDevice = "gpu" | "cpu";
-
-let modelId: string | null = null;
-let loading: Promise<string> | null = null;
-let busy = false;
-let lastInferMs: number | null = null;
-let device: InferDevice | null = null;
-let gpuFailed = false;
-let deviceOverride: InferDevice | null = null;
-
 export function setDeviceOverride(d: InferDevice | null): void {
-  deviceOverride = d;
+  st.deviceOverride = d;
 }
 
-export function isReady(): boolean { return modelId !== null; }
-export function isBusy(): boolean { return busy; }
-export function getLastInferMs(): number | null { return lastInferMs; }
-export function getDevice(): InferDevice | null { return device; }
+export function isReady(): boolean { return st.modelId !== null; }
+export function isBusy(): boolean { return st.inflight > 0 || st.loading !== null; }
+export function getLastInferMs(): number | null { return st.lastInferMs; }
+export function getDevice(): InferDevice | null { return st.device; }
 
 export function isMissingModelError(error: unknown): boolean {
   return error instanceof Error && /Model with ID ".+" not found/i.test(error.message);
@@ -61,7 +79,6 @@ export function isMissingModelError(error: unknown): boolean {
 
 function nativePlatform(): string | null {
   try {
-    // require lazy: react-native es Flow-typed y revienta bajo bun/node (solo existe en Metro).
     return require("react-native").Platform.OS;
   } catch {
     return null;
@@ -77,10 +94,10 @@ function defaultModelKey(): ModelKey {
 }
 
 function preferredDevice(): InferDevice {
-  if (deviceOverride === "cpu" || deviceOverride === "gpu") return deviceOverride;
+  if (st.deviceOverride === "cpu" || st.deviceOverride === "gpu") return st.deviceOverride;
   const v = process.env.QVAC_DEVICE?.toLowerCase();
   if (v === "cpu" || v === "gpu") return v;
-  return gpuFailed ? "cpu" : "gpu";
+  return st.gpuFailed ? "cpu" : "gpu";
 }
 
 function modelConfig(d: InferDevice) {
@@ -95,40 +112,51 @@ async function loadOn(d: InferDevice, onProgress?: (pct: number) => void): Promi
   } as unknown as Parameters<typeof loadModel>[0]);
 }
 
+function withTimeout<T>(p: Promise<T>, ms: number, code: string): Promise<T> {
+  return Promise.race([
+    p,
+    new Promise<never>((_, reject) => setTimeout(() => reject(new Error(code)), ms)),
+  ]);
+}
+
 export function ensureModel(onProgress?: (pct: number) => void): Promise<string> {
-  if (modelId) return Promise.resolve(modelId);
-  if (!loading) {
-    loading = (async () => {
+  if (st.modelId) return Promise.resolve(st.modelId);
+  if (!st.loading) {
+    st.loading = (async () => {
       const preferred = preferredDevice();
       try {
-        const id = await loadOn(preferred, onProgress);
-        device = preferred;
-        console.log(`▸ QVAC device=${device} model=${selected.name}`);
+        const id = await withTimeout(loadOn(preferred, onProgress), 120000, "load_timeout");
+        st.device = preferred;
+        console.log(`▸ QVAC device=${st.device} model=${selected.name}`);
         return id;
       } catch (err) {
         if (preferred === "cpu") throw err;
-        gpuFailed = true;
+        st.gpuFailed = true;
         console.warn(`▸ QVAC GPU load failed, falling back to CPU:`, err instanceof Error ? err.message : err);
-        const id = await loadOn("cpu", onProgress);
-        device = "cpu";
-        console.log(`▸ QVAC device=${device} model=${selected.name}`);
+        const id = await withTimeout(loadOn("cpu", onProgress), 120000, "load_timeout");
+        st.device = "cpu";
+        console.log(`▸ QVAC device=${st.device} model=${selected.name}`);
         return id;
       }
     })().then((id) => {
-      modelId = id;
-      loading = null;
+      st.modelId = id;
+      st.loading = null;
       return id;
     }).catch((err) => {
-      loading = null;
+      st.loading = null;
       throw err;
     });
   }
-  return loading;
+  return st.loading;
 }
 
-export async function inferJson(system: string, user: string, schema: object, timeoutMs = 90000): Promise<{ text: string; inferMs: number }> {
-  if (busy) throw new Error("model_busy");
-  busy = true;
+export async function inferJson(system: string, user: string, schema: object, timeoutMs = 45000): Promise<{ text: string; inferMs: number }> {
+  const prev = st.tail;
+  let release!: () => void;
+  st.tail = new Promise<void>((r) => { release = r; });
+  await prev;
+  st.inflight += 1;
+
   const t0 = Date.now();
   try {
     const complete = async (id: string) => {
@@ -141,9 +169,13 @@ export async function inferJson(system: string, user: string, schema: object, ti
         stream: false,
         responseFormat: { type: "json_schema", json_schema: { name: "observation", schema: schema as Record<string, unknown> } },
       });
-      const timeout = new Promise<never>((_, reject) =>
-        setTimeout(() => reject(new Error("infer_timeout")), timeoutMs));
-      return Promise.race([run.final, timeout]);
+      try {
+        return await withTimeout(run.final, timeoutMs, "infer_timeout");
+      } catch (err) {
+        // ponytail: race no cancela el worker. Esperar el final nativo antes de la siguiente inferencia.
+        await run.final.catch(() => {});
+        throw err;
+      }
     };
 
     let id = await ensureModel();
@@ -151,27 +183,26 @@ export async function inferJson(system: string, user: string, schema: object, ti
     try {
       final = await complete(id);
     } catch (error) {
-      if (device !== "gpu" || !isMissingModelError(error)) throw error;
-      gpuFailed = true;
-      modelId = null;
-      loading = null;
-      device = null;
+      if (st.device !== "gpu" || !isMissingModelError(error)) throw error;
+      st.gpuFailed = true;
+      st.modelId = null;
+      st.loading = null;
+      st.device = null;
       id = await ensureModel();
       final = await complete(id);
     }
-    lastInferMs = Date.now() - t0;
-    return { text: final.contentText, inferMs: lastInferMs };
+    st.lastInferMs = Date.now() - t0;
+    return { text: final.contentText, inferMs: st.lastInferMs };
   } finally {
-    busy = false;
+    st.inflight = Math.max(0, st.inflight - 1);
+    release();
   }
 }
 
 export async function shutdown(): Promise<void> {
-  if (!modelId) return;
-  // ponytail: QVAC-19304 — unload/kill of a GPU worker crashes the Android process.
-  // Keep the model loaded for the session; process exit is the only teardown.
+  if (!st.modelId) return;
   if (isAndroid()) return;
-  await unloadModel({ modelId }).catch(() => {});
-  modelId = null;
-  device = null;
+  await unloadModel({ modelId: st.modelId }).catch(() => {});
+  st.modelId = null;
+  st.device = null;
 }

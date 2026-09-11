@@ -1,7 +1,10 @@
-import { useRef, useState } from "react";
-import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
+import { useEffect, useRef, useState } from "react";
+import { getDevice } from "../lib/qvac";
+import { ActivityIndicator, KeyboardAvoidingView, Platform, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import { appendFollowUp, MODALITIES, type Modality, type ObservationDraft } from "../../shared/observation";
 import { type useStore, OBSERVATION_STATUSES, SOURCE_TYPES } from "../lib/store";
+import { Button, Card, Input, Select } from "../ui/primitives";
+import { MODALITY_LABELS, color, radius, space, type } from "../ui/theme";
 
 type Store = ReturnType<typeof useStore>;
 
@@ -10,30 +13,70 @@ const EXAMPLES = [
   "Clínica Brisa del Norte, Bogotá, Colombia. Tres ecógrafos Novascan NS-200 de unos cinco años.",
   "Hospital Valle Serena en Madrid. Un tomógrafo Medtron de tres años y dos equipos de rayos X sin marca visible.",
 ];
+const EXAMPLE_LABELS: Record<string, string> = Object.fromEntries(EXAMPLES.map((e) => [e, `${e.slice(0, 40).trimEnd()}…`]));
+const SOURCE_LABELS: Record<string, string> = Object.fromEntries(SOURCE_TYPES.map((s) => [s, `Fuente: ${s}`]));
+const GREETING = "Cuéntame qué viste en la visita: hospital, ciudad, equipos, marcas, antigüedad.";
 
-export function ObservationCapture({ store }: { store: Store }) {
+interface Msg {
+  id: string;
+  role: "assistant" | "user";
+  text: string;
+  caption?: string;
+}
+
+const msgId = () => `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+const msg = (role: Msg["role"], text: string, caption?: string): Msg => ({ id: msgId(), role, text, caption });
+
+export function ObservationCapture({ store, onBusyChange }: { store: Store; onBusyChange?: (busy: boolean) => void }) {
+  const [messages, setMessages] = useState<Msg[]>(() => [msg("assistant", GREETING)]);
   const [text, setText] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<ExtractionResultLocal | null>(null);
   const [draft, setDraft] = useState<ObservationDraft | null>(null);
   const [saving, setSaving] = useState(false);
+  const [saved, setSaved] = useState(false);
   const [submittedBy, setSubmittedBy] = useState("");
   const [observedAt, setObservedAt] = useState(new Date().toISOString().slice(0, 10));
-  const [sourceType, setSourceType] = useState("visita");
-  const [followAnswer, setFollowAnswer] = useState("");
+  const [sourceType, setSourceType] = useState<(typeof SOURCE_TYPES)[number]>("visita");
+  const [status, setStatus] = useState<(typeof OBSERVATION_STATUSES)[number]>("Confirmado");
+  const [showDetails, setShowDetails] = useState(false);
   const transcriptRef = useRef("");
+  const scrollRef = useRef<ScrollView>(null);
+  const [elapsedSec, setElapsedSec] = useState(0);
+
+  useEffect(() => {
+    onBusyChange?.(loading || saving);
+  }, [loading, saving, onBusyChange]);
+
+  useEffect(() => {
+    if (!loading) {
+      setElapsedSec(0);
+      return;
+    }
+    const t0 = Date.now();
+    setElapsedSec(0);
+    const id = setInterval(() => setElapsedSec(Math.floor((Date.now() - t0) / 1000)), 500);
+    return () => clearInterval(id);
+  }, [loading]);
+
+  const push = (...items: Msg[]) => setMessages((prev) => [...prev, ...items]);
+  const awaitingAnswer = !!result?.question;
 
   async function extract() {
     if (text.trim().length < 10 || loading) return;
     transcriptRef.current = text.trim();
+    push(msg("user", transcriptRef.current));
+    setText("");
+    setSaved(false);
     await runExtraction(transcriptRef.current);
   }
 
   async function answerFollowUp() {
-    if (!result || followAnswer.trim().length < 2 || loading) return;
-    transcriptRef.current = appendFollowUp(transcriptRef.current, followAnswer);
-    setFollowAnswer("");
+    if (!result || text.trim().length < 2 || loading) return;
+    transcriptRef.current = appendFollowUp(transcriptRef.current, text);
+    push(msg("user", text.trim()));
+    setText("");
     await runExtraction(transcriptRef.current);
   }
 
@@ -45,14 +88,24 @@ export function ObservationCapture({ store }: { store: Store }) {
       const res = await store.extract(input);
       setResult(res);
       setDraft(JSON.parse(JSON.stringify(res.draft)));
+      const dev = getDevice()?.toUpperCase() ?? "?";
+      const items = [msg("assistant", "Esto es lo que entendí. Revisa y corrige lo necesario.", `Inferencia ${(res.inferMs / 1000).toFixed(1)} s · ${dev}`)];
+      if (res.question) items.push(msg("assistant", res.question));
+      push(...items);
     } catch (e) {
-      setError(e instanceof Error ? e.message : "extract_failed");
+      const code = e instanceof Error ? e.message : "extract_failed";
+      setError(
+        code === "infer_timeout" ? "La IA local tardó demasiado. Cierra la app y vuelve a abrirla (el worker GPU puede haber quedado ocupado)."
+          : code === "model_busy" ? "El modelo está ocupado. Espera un momento e inténtalo de nuevo."
+          : code === "load_timeout" ? "No se pudo cargar el modelo a tiempo. Reinicia la app."
+          : code,
+      );
     } finally {
       setLoading(false);
     }
   }
 
-  function confirm(status: (typeof OBSERVATION_STATUSES)[number]) {
+  function confirm(nextStatus: (typeof OBSERVATION_STATUSES)[number]) {
     if (!draft || !result || saving) return;
     if (!draft.client) {
       setError("Falta el cliente: complétalo antes de guardar.");
@@ -64,7 +117,7 @@ export function ObservationCapture({ store }: { store: Store }) {
         client: draft.client,
         city: draft.city,
         country: draft.country,
-        status,
+        status: nextStatus,
         sourceText: result.sourceText,
         equipment: draft.equipment,
         submittedBy: submittedBy.trim() || null,
@@ -75,6 +128,12 @@ export function ObservationCapture({ store }: { store: Store }) {
       setResult(null);
       setDraft(null);
       setText("");
+      setError(null);
+      setSaved(true);
+      const summary = draft.equipment
+        .map((e) => `${e.quantity ?? "?"} × ${MODALITY_LABELS[e.modality ?? ""] ?? e.modality ?? "equipo"}`)
+        .join(", ");
+      push(msg("assistant", `Guardada · ${draft.client} · ${summary || "sin equipos"} · ${nextStatus}.`));
     } catch (e) {
       setError(e instanceof Error ? e.message : "save_failed");
     } finally {
@@ -82,148 +141,132 @@ export function ObservationCapture({ store }: { store: Store }) {
     }
   }
 
-  function updateEquipment(index: number, field: string, value: string) {
+  function updateEquipment(index: number, field: string, value: string | number | null) {
     if (!draft) return;
     setDraft((prev) => {
       if (!prev) return prev;
       const eq = [...prev.equipment];
-      const item = { ...eq[index] };
-      if (field === "quantity" || field === "ageYears") {
-        const n = value === "" ? null : Number(value);
-        (item as Record<string, unknown>)[field] = Number.isInteger(n) ? n : null;
-      } else {
-        (item as Record<string, unknown>)[field] = value === "" ? null : value;
-      }
-      eq[index] = item;
+      eq[index] = { ...eq[index], [field]: value };
       return { ...prev, equipment: eq };
     });
   }
 
+  function reset() {
+    setMessages([msg("assistant", GREETING)]);
+    setResult(null);
+    setDraft(null);
+    setError(null);
+    setSaved(false);
+    setText("");
+    transcriptRef.current = "";
+  }
+
+  const toInt = (v: string) => (v.trim() === "" ? null : Number.isFinite(parseInt(v, 10)) ? parseInt(v, 10) : null);
+  const canSend = !loading && text.trim().length >= (awaitingAnswer ? 2 : 10);
+
   return (
-    <View style={styles.card}>
-      <Text style={styles.h2}>Nueva observación</Text>
+    <KeyboardAvoidingView style={styles.root} behavior={Platform.OS === "ios" ? "padding" : undefined}>
+      <ScrollView
+        ref={scrollRef}
+        style={styles.thread}
+        contentContainerStyle={styles.threadContent}
+        keyboardShouldPersistTaps="handled"
+        onContentSizeChange={() => scrollRef.current?.scrollToEnd({ animated: true })}
+      >
+        {messages.map((m) => <Bubble key={m.id} msg={m} />)}
 
-      <Text style={styles.label}>Lo que viste en la visita</Text>
-      <TextInput
-        style={styles.textarea}
-        value={text}
-        onChangeText={setText}
-        multiline
-        numberOfLines={4}
-        placeholder="Ej.: Estoy en Hospital DemoCare Pacific, en Panamá. Vi dos resonadores…"
-        placeholderTextColor="#555"
-      />
-
-      <View style={styles.metaRow}>
-        <View style={styles.metaField}>
-          <Text style={styles.label}>Quién observó</Text>
-          <TextInput style={styles.input} value={submittedBy} onChangeText={setSubmittedBy} placeholder="Nombre" placeholderTextColor="#555" />
-        </View>
-        <View style={styles.metaField}>
-          <Text style={styles.label}>Fecha</Text>
-          <TextInput style={styles.input} value={observedAt} onChangeText={setObservedAt} placeholder="YYYY-MM-DD" placeholderTextColor="#555" />
-        </View>
-        <View style={styles.metaField}>
-          <Text style={styles.label}>Fuente</Text>
-          <View style={styles.pickerWrap}>
-            {SOURCE_TYPES.map((st) => (
-              <Pressable key={st} style={[styles.pickerBtn, sourceType === st && styles.pickerBtnActive]} onPress={() => setSourceType(st)}>
-                <Text style={[styles.pickerBtnText, sourceType === st && styles.pickerBtnTextActive]}>{st}</Text>
-              </Pressable>
-            ))}
+        {loading && (
+          <View style={[styles.bubble, styles.assistant, styles.loadingRow]}>
+            <ActivityIndicator color={color.textSecondary} />
+            <View style={{ flex: 1, gap: 2 }}>
+              <Text style={type.body}>Extrayendo con IA local…</Text>
+              <Text style={type.caption}>
+                {elapsedSec > 0 ? `${elapsedSec} s transcurridos` : "Iniciando…"}
+                {getDevice() ? ` · ${getDevice()?.toUpperCase()}` : ""}
+              </Text>
+            </View>
           </View>
-        </View>
-      </View>
+        )}
 
-      <Pressable style={[styles.btn, (loading || text.trim().length < 10) && styles.btnDisabled]} onPress={extract} disabled={loading || text.trim().length < 10}>
-        {loading ? <ActivityIndicator color="#fff" size="small" /> : <Text style={styles.btnText}>Extraer con IA local</Text>}
-      </Pressable>
+        {result && draft && (
+          <>
+            <Card style={styles.draftCard}>
+              <Input label="Cliente (requerido)" value={draft.client ?? ""} onChangeText={(v) => setDraft({ ...draft, client: v })} placeholder="Hospital o clínica" />
+              <View style={styles.pair}>
+                <Input style={styles.half} label="Ciudad" value={draft.city ?? ""} onChangeText={(v) => setDraft({ ...draft, city: v || null })} />
+                <Input style={styles.half} label="País" value={draft.country ?? ""} onChangeText={(v) => setDraft({ ...draft, country: v || null })} />
+              </View>
 
-      <ScrollView horizontal style={styles.examples} showsHorizontalScrollIndicator={false}>
-        {EXAMPLES.map((ex) => (
-          <Pressable key={ex} style={styles.exampleBtn} onPress={() => setText(ex)}>
-            <Text style={styles.exampleText}>{ex.slice(0, 50)}…</Text>
-          </Pressable>
-        ))}
+              {draft.equipment.map((eq, i) => (
+                <View key={i} style={styles.equipment}>
+                  <Text style={type.heading}>Equipo {i + 1}</Text>
+                  <Select label="Modalidad" value={(eq.modality ?? "otra") as Modality} options={MODALITIES} labels={MODALITY_LABELS} onChange={(v) => updateEquipment(i, "modality", v)} />
+                  <View style={styles.pair}>
+                    <Input style={styles.half} label="Cantidad" keyboardType="numeric" value={eq.quantity == null ? "" : String(eq.quantity)} onChangeText={(v) => updateEquipment(i, "quantity", toInt(v))} />
+                    <Input style={styles.half} label="Antigüedad (años)" keyboardType="numeric" value={eq.ageYears == null ? "" : String(eq.ageYears)} onChangeText={(v) => updateEquipment(i, "ageYears", toInt(v))} />
+                  </View>
+                  <View style={styles.pair}>
+                    <Input style={styles.half} label="Marca" value={eq.brand ?? ""} onChangeText={(v) => updateEquipment(i, "brand", v || null)} />
+                    <Input style={styles.half} label="Modelo" value={eq.model ?? ""} onChangeText={(v) => updateEquipment(i, "model", v || null)} />
+                  </View>
+                  {eq.evidence ? <Text style={styles.evidence}>“{eq.evidence}”</Text> : null}
+                </View>
+              ))}
+            </Card>
+
+            <View style={[styles.bubble, styles.assistant, { gap: space.md }]}>
+              <Text style={type.body}>Cuando esté correcto, elige el estado y guarda.</Text>
+              <Select label="Estado" value={status} options={OBSERVATION_STATUSES} onChange={setStatus} />
+              <Button label="Guardar observación" onPress={() => confirm(status)} loading={saving} />
+            </View>
+          </>
+        )}
+
+        {error && (
+          <View style={[styles.bubble, styles.assistant]}>
+            <Text style={[type.body, { color: color.danger }]}>{error}</Text>
+          </View>
+        )}
+
+        {saved && <Button label="Nueva observación" variant="secondary" onPress={reset} style={styles.newBtn} />}
       </ScrollView>
 
-      {error && <Text style={styles.error}>{error}</Text>}
-
-      {result && draft && (
-        <View style={styles.review}>
-          <Text style={styles.h3}>Borrador extraído <Text style={styles.muted}>({(result.inferMs / 1000).toFixed(1)} s en local)</Text></Text>
-
-          <View style={styles.grid}>
-            <View style={styles.gridField}>
-              <Text style={styles.label}>Cliente</Text>
-              <TextInput style={styles.input} value={draft.client ?? ""} onChangeText={(v) => setDraft({ ...draft, client: v })} placeholderTextColor="#555" />
-            </View>
-            <View style={styles.gridField}>
-              <Text style={styles.label}>Ciudad</Text>
-              <TextInput style={styles.input} value={draft.city ?? ""} onChangeText={(v) => setDraft({ ...draft, city: v })} placeholderTextColor="#555" />
-            </View>
-            <View style={styles.gridField}>
-              <Text style={styles.label}>País</Text>
-              <TextInput style={styles.input} value={draft.country ?? ""} onChangeText={(v) => setDraft({ ...draft, country: v })} placeholderTextColor="#555" />
-            </View>
-          </View>
-
-          {draft.equipment.map((eq, i) => (
-            <View key={i} style={styles.equip}>
-              <Text style={styles.h4}>Equipo {i + 1}</Text>
-              <View style={styles.grid}>
-                <View style={styles.gridField}>
-                  <Text style={styles.label}>Modalidad</Text>
-                  <View style={styles.pickerWrap}>
-                    {MODALITIES.map((m) => (
-                      <Pressable key={m} style={[styles.pickerBtn, eq.modality === m && styles.pickerBtnActive]} onPress={() => updateEquipment(i, "modality", m)}>
-                        <Text style={[styles.pickerBtnText, eq.modality === m && styles.pickerBtnTextActive]}>{m}</Text>
-                      </Pressable>
-                    ))}
-                  </View>
-                </View>
-                <View style={styles.gridField}>
-                  <Text style={styles.label}>Cantidad</Text>
-                  <TextInput style={styles.input} keyboardType="numeric" value={eq.quantity?.toString() ?? ""} onChangeText={(v) => updateEquipment(i, "quantity", v)} placeholderTextColor="#555" />
-                </View>
-                <View style={styles.gridField}>
-                  <Text style={styles.label}>Marca</Text>
-                  <TextInput style={styles.input} value={eq.brand ?? ""} onChangeText={(v) => updateEquipment(i, "brand", v)} placeholderTextColor="#555" />
-                </View>
-                <View style={styles.gridField}>
-                  <Text style={styles.label}>Modelo</Text>
-                  <TextInput style={styles.input} value={eq.model ?? ""} onChangeText={(v) => updateEquipment(i, "model", v)} placeholderTextColor="#555" />
-                </View>
-                <View style={styles.gridField}>
-                  <Text style={styles.label}>Antigüedad</Text>
-                  <TextInput style={styles.input} keyboardType="numeric" value={eq.ageYears?.toString() ?? ""} onChangeText={(v) => updateEquipment(i, "ageYears", v)} placeholderTextColor="#555" />
-                </View>
-              </View>
-              {eq.evidence ? <Text style={styles.evidence}>"{eq.evidence}"</Text> : null}
-            </View>
-          ))}
-
-          {result.question && (
-            <>
-              <Text style={styles.question}>{result.question}</Text>
-              <View style={styles.followRow}>
-                <TextInput style={styles.input} value={followAnswer} onChangeText={setFollowAnswer} placeholder="Responde aquí…" placeholderTextColor="#555" onSubmitEditing={answerFollowUp} />
-                <Pressable style={[styles.btn, (loading || followAnswer.trim().length < 2) && styles.btnDisabled]} onPress={answerFollowUp} disabled={loading || followAnswer.trim().length < 2}>
-                  <Text style={styles.btnText}>Agregar</Text>
-                </Pressable>
-              </View>
-            </>
-          )}
-
-          <View style={styles.confirmRow}>
-            {OBSERVATION_STATUSES.map((s) => (
-              <Pressable key={s} style={[styles.btn, s === "Confirmado" && styles.btnPrimary, saving && styles.btnDisabled]} onPress={() => confirm(s)} disabled={saving}>
-                <Text style={styles.btnText}>{s}</Text>
-              </Pressable>
-            ))}
-          </View>
+      <View style={styles.composer}>
+        <View style={styles.pair}>
+          <Select style={styles.half} value={null} options={EXAMPLES} labels={EXAMPLE_LABELS} placeholder="Ejemplos" onChange={setText} />
+          <Select style={styles.half} value={sourceType} options={SOURCE_TYPES} labels={SOURCE_LABELS} onChange={setSourceType} />
         </View>
-      )}
+        <Pressable onPress={() => setShowDetails((s) => !s)} accessibilityRole="button" accessibilityState={{ expanded: showDetails }} hitSlop={8}>
+          <Text style={styles.link}>{showDetails ? "Ocultar detalles" : "Detalles"}</Text>
+        </Pressable>
+        {showDetails && (
+          <View style={styles.pair}>
+            <Input style={styles.half} label="Quién observó" value={submittedBy} onChangeText={setSubmittedBy} placeholder="Nombre" />
+            <Input style={styles.half} label="Fecha (AAAA-MM-DD)" value={observedAt} onChangeText={setObservedAt} placeholder="AAAA-MM-DD" />
+          </View>
+        )}
+        <View style={styles.sendRow}>
+          <Input
+            style={{ flex: 1 }}
+            value={text}
+            onChangeText={setText}
+            multiline
+            inputStyle={styles.composerInput}
+            placeholder={awaitingAnswer ? "Responde aquí…" : "Escribe lo que viste…"}
+          />
+          <Button label="Enviar" onPress={awaitingAnswer ? answerFollowUp : extract} disabled={!canSend} style={styles.sendBtn} />
+        </View>
+      </View>
+    </KeyboardAvoidingView>
+  );
+}
+
+function Bubble({ msg: m }: { msg: Msg }) {
+  const user = m.role === "user";
+  return (
+    <View style={[styles.bubble, user ? styles.user : styles.assistant]}>
+      <Text style={[type.body, user && { color: color.primaryText }]}>{m.text}</Text>
+      {m.caption ? <Text style={[type.caption, styles.caption]}>{m.caption}</Text> : null}
     </View>
   );
 }
@@ -235,39 +278,24 @@ interface ExtractionResultLocal {
   sourceText: string;
 }
 
-const BORDER = "#2A2A33";
-const CARD_BG = "#121219";
-
 const styles = StyleSheet.create({
-  card: { backgroundColor: CARD_BG, borderRadius: 12, padding: 16, gap: 12 },
-  h2: { color: "#fff", fontSize: 18, fontWeight: "600" },
-  h3: { color: "#fff", fontSize: 16, fontWeight: "600", marginTop: 4 },
-  h4: { color: "#A7A7B3", fontSize: 13, fontWeight: "600", marginBottom: 4 },
-  label: { color: "#7E7E8A", fontSize: 11, marginBottom: 4 },
-  muted: { color: "#7E7E8A", fontSize: 12, fontWeight: "400" },
-  textarea: { backgroundColor: "#0B0B0F", color: "#fff", borderWidth: 1, borderColor: BORDER, borderRadius: 8, padding: 10, fontSize: 14, minHeight: 80 },
-  input: { backgroundColor: "#0B0B0F", color: "#fff", borderWidth: 1, borderColor: BORDER, borderRadius: 8, padding: 8, fontSize: 14, flex: 1 },
-  metaRow: { flexDirection: "row", gap: 8 },
-  metaField: { flex: 1 },
-  grid: { flexDirection: "row", flexWrap: "wrap", gap: 8 },
-  gridField: { width: "31%", minWidth: 90 },
-  pickerWrap: { flexDirection: "row", flexWrap: "wrap", gap: 4 },
-  pickerBtn: { paddingHorizontal: 8, paddingVertical: 6, borderRadius: 6, backgroundColor: "#0B0B0F", borderWidth: 1, borderColor: BORDER },
-  pickerBtnActive: { backgroundColor: "#2B2BFF", borderColor: "#2B2BFF" },
-  pickerBtnText: { color: "#A7A7B3", fontSize: 11 },
-  pickerBtnTextActive: { color: "#fff" },
-  btn: { backgroundColor: "#2B2BFF", paddingHorizontal: 16, paddingVertical: 12, borderRadius: 8, alignItems: "center", marginTop: 4 },
-  btnPrimary: { backgroundColor: "#22C55E" },
-  btnDisabled: { opacity: 0.4 },
-  btnText: { color: "#fff", fontSize: 14, fontWeight: "600" },
-  examples: { flexDirection: "row", gap: 8 },
-  exampleBtn: { backgroundColor: "#0B0B0F", borderWidth: 1, borderColor: BORDER, borderRadius: 8, paddingHorizontal: 10, paddingVertical: 8, marginRight: 8 },
-  exampleText: { color: "#7E7E8A", fontSize: 11 },
-  error: { color: "#EF4444", fontSize: 13 },
-  review: { marginTop: 8, gap: 8 },
-  equip: { backgroundColor: "#0B0B0F", borderRadius: 8, padding: 10, gap: 8 },
-  evidence: { color: "#7E7E8A", fontSize: 11, fontStyle: "italic" },
-  question: { color: "#FBBF24", fontSize: 13, backgroundColor: "rgba(251,191,36,0.08)", padding: 8, borderRadius: 6 },
-  followRow: { flexDirection: "row", gap: 8, alignItems: "center" },
-  confirmRow: { flexDirection: "row", flexWrap: "wrap", gap: 8, marginTop: 8 },
+  root: { flex: 1, backgroundColor: color.bg },
+  thread: { flex: 1 },
+  threadContent: { padding: space.lg, gap: space.sm },
+  bubble: { maxWidth: "85%", borderRadius: radius.lg, paddingHorizontal: space.md, paddingVertical: space.sm + 2 },
+  assistant: { alignSelf: "flex-start", backgroundColor: color.surfaceMuted },
+  user: { alignSelf: "flex-end", backgroundColor: color.primary },
+  caption: { marginTop: space.xs },
+  loadingRow: { flexDirection: "row", alignItems: "center", gap: space.sm },
+  draftCard: { alignSelf: "stretch", padding: space.md, gap: space.md },
+  equipment: { gap: space.sm, paddingTop: space.md, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: color.border },
+  pair: { flexDirection: "row", gap: space.sm },
+  half: { flex: 1 },
+  evidence: { ...type.secondary, fontStyle: "italic" },
+  newBtn: { alignSelf: "flex-start" },
+  composer: { backgroundColor: color.surface, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: color.border, padding: space.md, gap: space.sm },
+  link: { ...type.caption, color: color.link, alignSelf: "flex-start" },
+  sendRow: { flexDirection: "row", alignItems: "flex-end", gap: space.sm },
+  sendBtn: { minHeight: 44, paddingHorizontal: space.md },
+  composerInput: { minHeight: 44, maxHeight: 120 },
 });

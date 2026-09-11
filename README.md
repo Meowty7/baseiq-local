@@ -79,6 +79,15 @@ bunx expo prebuild --platform android   # necesita `node` en PATH (p. ej. nvm)
 bun run android                         # device físico
 ```
 
+### Requisitos Android (no van a Git)
+
+- **SDK de Android**: define `ANDROID_HOME` o crea `android/local.properties` con `sdk.dir=/ruta/al/Sdk` (gitignored). Expo lo autogenera si `ANDROID_HOME` está seteado.
+- **JDK 17+ para Gradle**: Gradle corre sobre el `java` del sistema. Si ese `java` es un JRE sin compilador (p. ej. `java-*-openjdk-headless` en Fedora), los módulos sin `jvmToolchain` como `react-native-bare-kit` fallan con `does not provide the required capabilities: [JAVA_COMPILER]`. Apunta Gradle a un JDK real en `~/.gradle/gradle.properties`:
+  ```
+  org.gradle.java.home=/ruta/al/jdk-21
+  ```
+  Ambos archivos son por máquina y no se commitean; cada dev los apunta al suyo (en Windows, la misma clave a su JDK).
+
 La primera vez baja el GGUF a la caché de QVAC (fuera de Git). Después funciona offline.
 
 `android/` e `ios/` se generan con prebuild y no van a Git.
