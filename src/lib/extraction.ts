@@ -1,4 +1,4 @@
-import { EXTRACTION_SCHEMA, normalizeDraft, nextQuestion, groundDraft, toEnglishObservation, type ObservationDraft } from "../../shared/observation";
+import { EXTRACTION_SCHEMA, normalizeDraft, nextQuestion, nextQuestionField, groundDraft, toEnglishObservation, type ObservationDraft } from "../../shared/observation";
 import { inferJson, translateNote } from "./qvac";
 
 const SYSTEM =
@@ -37,7 +37,7 @@ function retryableInferError(err: unknown): boolean {
 export async function extractObservation(
   text: string,
   lang = "es",
-): Promise<{ draft: ObservationDraft; question: string | null; inferMs: number; english: string; translateVia: TranslateVia }> {
+): Promise<{ draft: ObservationDraft; question: string | null; questionField: { field: string; equipmentIndex: number | null } | null; inferMs: number; english: string; translateVia: TranslateVia }> {
   let lastError: unknown = null;
   const { english, via } = await resolveObservationEnglish(text, lang);
   // Blindar contra original + inglés: nombres propios vienen de L, cantidades/edad del NMT.
@@ -47,7 +47,7 @@ export async function extractObservation(
       const { text: raw, inferMs } = await inferJson(SYSTEM, english, EXTRACTION_SCHEMA);
       const draft = groundDraft(normalizeDraft(JSON.parse(raw.trim())), sourceForGrounding, english);
       draft.missing = computeMissing(draft);
-      return { draft, question: nextQuestion(draft, lang), inferMs, english, translateVia: via };
+      return { draft, question: nextQuestion(draft, lang), questionField: nextQuestionField(draft), inferMs, english, translateVia: via };
     } catch (err) {
       lastError = err;
       if (err instanceof Error) console.warn(`extract attempt ${attempt + 1} failed: ${err.message}`);
@@ -62,9 +62,12 @@ function computeMissing(draft: ObservationDraft): string[] {
   if (!draft.client) missing.add("client");
   if (!draft.city) missing.add("city");
   if (!draft.country) missing.add("country");
-  for (const e of draft.equipment) {
+  draft.equipment.forEach((e, i) => {
     if (!e.modality) missing.add("modality");
     if (e.quantity === null) missing.add("quantity");
-  }
+    if (!e.brand) missing.add(`brand.${i}`);
+    if (!e.model) missing.add(`model.${i}`);
+    if (e.ageYears === null) missing.add(`ageYears.${i}`);
+  });
   return [...missing];
 }

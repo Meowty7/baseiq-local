@@ -27,6 +27,33 @@ interface Msg {
 const msgId = () => `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
 const msg = (role: Msg["role"], text: string, caption?: string): Msg => ({ id: msgId(), role, text, caption });
 
+/** Reads back the human-readable value a just-answered field now holds, for the confirmation prompt. */
+function describeFieldValue(
+  field: { field: string; equipmentIndex: number | null },
+  draft: ObservationDraft,
+  labels: Record<string, string>,
+): string | null {
+  const eq = field.equipmentIndex != null ? draft.equipment[field.equipmentIndex] : undefined;
+  switch (field.field) {
+    case "client": return draft.client;
+    case "location": return [draft.city, draft.country].filter(Boolean).join(", ") || null;
+    case "city": return draft.city;
+    case "country": return draft.country;
+    case "modality": {
+      const last = [...draft.equipment].reverse().find((e) => e.modality);
+      return last?.modality ? labels[last.modality] ?? last.modality : null;
+    }
+    case "quantity": {
+      const last = [...draft.equipment].reverse().find((e) => e.quantity != null);
+      return last?.quantity != null ? String(last.quantity) : null;
+    }
+    case "brand": return eq?.brand ?? null;
+    case "model": return eq?.model ?? null;
+    case "ageYears": return eq?.ageYears != null ? String(eq.ageYears) : null;
+    default: return null;
+  }
+}
+
 export interface ObservationCaptureHandle {
   /** Backs out of an in-progress draft/result review. Returns true if it handled (and consumed) the back press. */
   handleBack: () => boolean;
@@ -51,6 +78,7 @@ export const ObservationCapture = forwardRef<ObservationCaptureHandle, { store: 
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [questionSkipped, setQuestionSkipped] = useState(false);
+  const [pendingConfirm, setPendingConfirm] = useState<{ field: { field: string; equipmentIndex: number | null }; value: string; questionText: string } | null>(null);
   const [submittedBy, setSubmittedBy] = useState("");
   const [observedAt, setObservedAt] = useState(new Date().toISOString().slice(0, 10));
   const [sourceType, setSourceType] = useState<(typeof SOURCE_TYPES)[number]>("visita");
@@ -101,7 +129,7 @@ export const ObservationCapture = forwardRef<ObservationCaptureHandle, { store: 
   }, [loading]);
 
   const push = (...items: Msg[]) => setMessages((prev) => [...prev, ...items]);
-  const awaitingAnswer = !!result?.question && !questionSkipped;
+  const awaitingAnswer = !!result?.question && !questionSkipped && !pendingConfirm;
 
   async function extract() {
     if (text.trim().length < 10 || loading) return;
@@ -109,29 +137,46 @@ export const ObservationCapture = forwardRef<ObservationCaptureHandle, { store: 
     push(msg("user", transcriptRef.current));
     setText("");
     setSaved(false);
-    await runExtraction(transcriptRef.current);
+    await runExtraction(transcriptRef.current, null, null);
   }
 
   async function answerFollowUp() {
     if (!result || text.trim().length < 2 || loading) return;
+    const askedField = result.questionField;
+    const askedQuestionText = result.question;
     transcriptRef.current = appendFollowUp(transcriptRef.current, text);
     push(msg("user", text.trim()));
     setText("");
-    await runExtraction(transcriptRef.current);
+    await runExtraction(transcriptRef.current, askedField, askedQuestionText);
   }
 
-  async function runExtraction(input: string) {
+  async function runExtraction(
+    input: string,
+    askedField: { field: string; equipmentIndex: number | null } | null,
+    askedQuestionText: string | null,
+  ) {
     setLoading(true);
     setError(null);
     setResult(null);
     setQuestionSkipped(false);
+    setPendingConfirm(null);
     try {
       const res = await store.extract(input);
       setResult(res);
       setDraft(JSON.parse(JSON.stringify(res.draft)));
       const dev = getDevice()?.toUpperCase() ?? "?";
       const items = [msg("assistant", t("capture.understood"), t("capture.inferCaption", { sec: (res.inferMs / 1000).toFixed(1), device: dev }))];
-      if (res.question) items.push(msg("assistant", res.question));
+      // When this extraction was triggered by answering a follow-up question,
+      // read back the value that field now holds and ask the user to confirm
+      // it before moving on (to the next question, or to save) instead of
+      // silently trusting the model's read of a possibly ambiguous answer.
+      const answeredValue = askedField ? describeFieldValue(askedField, res.draft, labels) : null;
+      if (askedField && askedQuestionText && answeredValue) {
+        setPendingConfirm({ field: askedField, value: answeredValue, questionText: askedQuestionText });
+        items.push(msg("assistant", t("capture.confirmValue", { value: answeredValue })));
+      } else if (res.question) {
+        items.push(msg("assistant", res.question));
+      }
       push(...items);
     } catch (e) {
       const code = e instanceof Error ? e.message : "extract_failed";
@@ -144,6 +189,19 @@ export const ObservationCapture = forwardRef<ObservationCaptureHandle, { store: 
     } finally {
       setLoading(false);
     }
+  }
+
+  function confirmAnswerCorrect() {
+    if (!pendingConfirm || !result) return;
+    setPendingConfirm(null);
+    if (result.question) push(msg("assistant", result.question));
+  }
+
+  function confirmAnswerWrong() {
+    if (!pendingConfirm) return;
+    push(msg("assistant", t("capture.confirmRetry")));
+    push(msg("assistant", pendingConfirm.questionText));
+    setPendingConfirm(null);
   }
 
   function confirm(nextStatus: (typeof OBSERVATION_STATUSES)[number]) {
@@ -199,6 +257,7 @@ export const ObservationCapture = forwardRef<ObservationCaptureHandle, { store: 
     setError(null);
     setSaved(false);
     setQuestionSkipped(false);
+    setPendingConfirm(null);
     setText("");
     transcriptRef.current = "";
   }
@@ -214,7 +273,10 @@ export const ObservationCapture = forwardRef<ObservationCaptureHandle, { store: 
   }), [result, draft, saved]);
 
   const toInt = (v: string) => (v.trim() === "" ? null : Number.isFinite(parseInt(v, 10)) ? parseInt(v, 10) : null);
-  const canSend = !loading && text.trim().length >= (awaitingAnswer ? 2 : 10);
+  // While a just-given answer is awaiting Sí/No confirmation, the composer
+  // shouldn't accept free text — that text would otherwise be sent to extract()
+  // as a brand-new observation instead of resolving the pending confirmation.
+  const canSend = !loading && !pendingConfirm && text.trim().length >= (awaitingAnswer ? 2 : 10);
 
   return (
     <KeyboardAvoidingView style={styles.root} behavior={Platform.OS === "ios" ? "padding" : undefined}>
@@ -237,6 +299,13 @@ export const ObservationCapture = forwardRef<ObservationCaptureHandle, { store: 
                 {getDevice() ? ` · ${getDevice()?.toUpperCase()}` : ""}
               </Text>
             </View>
+          </View>
+        )}
+
+        {pendingConfirm && (
+          <View style={[styles.bubble, styles.assistant, styles.confirmRow]}>
+            <Button label={t("capture.confirmYes")} onPress={confirmAnswerCorrect} style={styles.confirmBtn} />
+            <Button label={t("capture.confirmNo")} variant="secondary" onPress={confirmAnswerWrong} style={styles.confirmBtn} />
           </View>
         )}
 
@@ -268,12 +337,12 @@ export const ObservationCapture = forwardRef<ObservationCaptureHandle, { store: 
 
             <View style={[styles.bubble, styles.assistant, { gap: space.md }]}>
               <Text style={theme.type.body}>
-                {awaitingAnswer
+                {awaitingAnswer || pendingConfirm
                   ? t("capture.answerFirst")
                   : t("capture.readyToSave")}
               </Text>
               <Select label={t("capture.status")} value={status} options={OBSERVATION_STATUSES} labels={statuses} onChange={setStatus} placeholder={t("select.placeholder")} />
-              <Button label={t("capture.save")} onPress={() => confirm(status)} loading={saving} disabled={awaitingAnswer} />
+              <Button label={t("capture.save")} onPress={() => confirm(status)} loading={saving} disabled={awaitingAnswer || !!pendingConfirm} />
               {awaitingAnswer && (
                 <Pressable onPress={() => setQuestionSkipped(true)} accessibilityRole="button" hitSlop={8}>
                   <Text style={styles.link}>{t("capture.skipQuestion")}</Text>
@@ -337,6 +406,7 @@ function Bubble({ msg: m }: { msg: Msg }) {
 interface ExtractionResultLocal {
   draft: ObservationDraft;
   question: string | null;
+  questionField: { field: string; equipmentIndex: number | null } | null;
   inferMs: number;
   sourceText: string;
 }
@@ -352,6 +422,8 @@ function makeStyles(theme: Theme) {
     user: { alignSelf: "flex-end", backgroundColor: color.primary },
     caption: { marginTop: space.xs },
     loadingRow: { flexDirection: "row", alignItems: "center", gap: space.sm },
+    confirmRow: { flexDirection: "row", gap: space.sm },
+    confirmBtn: { flex: 1 },
     draftCard: { alignSelf: "stretch", padding: space.md, gap: space.md },
     equipment: { gap: space.sm, paddingTop: space.md, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: color.border },
     pair: { flexDirection: "row", gap: space.sm },

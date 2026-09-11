@@ -202,20 +202,76 @@ export function normalizeDraft(raw: unknown): ObservationDraft {
   };
 }
 
-// ponytail: prioridad lineal por impacto en inventario; si crece a decenas de campos, usar pesos configurables.
-const MISSING_PRIORITY = ["client", "modality", "quantity", "city", "country", "brand", "model", "ageYears"];
+// Base value per field: how much a single missing instance of it is worth
+// asking about. client blocks saving outright, so it always wins. modality/
+// quantity define what was actually seen, so they outrank where/who. City
+// and country are grouped as one "location" ask instead of two separate
+// turns since a visitor who knows one often knows both. Enrichment fields
+// (brand/model/ageYears) are worth the least per occurrence. When several
+// equipment rows are missing the same enrichment field, each row keeps its
+// own candidate (score ties broken by equipment index) instead of collapsing
+// into one generic question — so with 3 units missing brand, the user gets
+// asked "brand of unit 1?", then "brand of unit 2?", etc., one at a time, to
+// find out for each row specifically whether they actually know it.
+const FIELD_BASE_VALUE: Record<string, number> = {
+  client: 100,
+  modality: 40,
+  quantity: 35,
+  location: 20,
+  brand: 8,
+  model: 6,
+  ageYears: 5,
+};
+
+interface MissingCandidate {
+  field: string;
+  score: number;
+  equipmentIndex: number | null;
+}
+
+function scoreMissing(draft: ObservationDraft): MissingCandidate[] {
+  const candidates: MissingCandidate[] = [];
+  const seen = new Set<string>();
+  for (const raw of draft.missing) {
+    const [field, idxStr] = raw.split(".");
+    const equipmentIndex = idxStr != null ? Number(idxStr) : null;
+    if (field === "city" || field === "country") {
+      if (seen.has("location")) continue;
+      seen.add("location");
+      const bothMissing = draft.missing.includes("city") && draft.missing.includes("country");
+      candidates.push({ field: "location", score: FIELD_BASE_VALUE.location * (bothMissing ? 1.5 : 1), equipmentIndex: null });
+      continue;
+    }
+    const base = FIELD_BASE_VALUE[field];
+    if (base == null) continue;
+    const key = equipmentIndex == null ? field : `${field}.${equipmentIndex}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    candidates.push({ field, score: base, equipmentIndex });
+  }
+  // Higher score first; among ties (e.g. brand.0 vs brand.1), lower equipment
+  // index first, so multi-equipment gaps get asked about in order.
+  return candidates.sort((a, b) => b.score - a.score || (a.equipmentIndex ?? -1) - (b.equipmentIndex ?? -1));
+}
 
 export function rankMissing(draft: ObservationDraft): string[] {
-  return [...draft.missing].sort(
-    (a, b) => MISSING_PRIORITY.indexOf(a.split(".")[0]) - MISSING_PRIORITY.indexOf(b.split(".")[0]),
-  );
+  return scoreMissing(draft).map((c) => (c.equipmentIndex == null ? c.field : `${c.field}.${c.equipmentIndex}`));
 }
 
 export function nextQuestion(draft: ObservationDraft, lang?: string): string | null {
-  const top = rankMissing(draft)[0];
+  const top = scoreMissing(draft)[0];
   if (!top) return null;
-  const field = top.split(".")[0];
-  return getQuestion(field, lang ?? "es");
+  // Only spell out which equipment the question is about once there's more
+  // than one row to disambiguate between — with a single equipment, "brand
+  // of equipment 1?" would just be noise.
+  const equipmentNumber = top.equipmentIndex != null && draft.equipment.length > 1 ? top.equipmentIndex + 1 : undefined;
+  return getQuestion(top.field, lang ?? "es", equipmentNumber);
+}
+
+/** Same ranking as nextQuestion, but also returns the raw field id (e.g. "brand", "location") and which equipment row it's about, so callers can read back the value the user just supplied for it. */
+export function nextQuestionField(draft: ObservationDraft): { field: string; equipmentIndex: number | null } | null {
+  const top = scoreMissing(draft)[0];
+  return top ? { field: top.field, equipmentIndex: top.equipmentIndex } : null;
 }
 
 export const MODALITY_GLOSSARY: { id: Modality; es: string; en: string }[] = [

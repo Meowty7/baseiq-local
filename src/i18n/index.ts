@@ -151,7 +151,8 @@ export async function localizeUi(lang: string, onProgress?: (pct: number) => voi
   const keys = Object.keys(STRINGS.en) as StringKey[];
   const qKeys = Object.keys(QUESTIONS.en);
   const protectedStrings = keys.map((k) => protect(STRINGS.en[k]));
-  const texts = [...protectedStrings.map((p) => p.text), ...qKeys.map((k) => QUESTIONS.en[k])];
+  const protectedQuestions = qKeys.map((k) => protect(QUESTIONS.en[k]));
+  const texts = [...protectedStrings.map((p) => p.text), ...protectedQuestions.map((p) => p.text)];
   const batch = await translateBatch("en", lang, texts, 180000, onProgress);
   if (!batch || batch.translations.length !== texts.length) {
     console.warn(`▸ i18n localizeUi failed for ${lang}`);
@@ -160,7 +161,7 @@ export async function localizeUi(lang: string, onProgress?: (pct: number) => voi
   const strings: Record<string, string> = {};
   keys.forEach((k, i) => { strings[k] = unprotect(batch.translations[i], protectedStrings[i].slots); });
   const questions: Record<string, string> = {};
-  qKeys.forEach((k, i) => { questions[k] = batch.translations[keys.length + i]; });
+  qKeys.forEach((k, i) => { questions[k] = unprotect(batch.translations[keys.length + i], protectedQuestions[i].slots); });
   applyOverlay(lang, strings, questions);
   await writeCache(lang, { strings, questions });
   notify();

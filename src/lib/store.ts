@@ -39,6 +39,7 @@ export interface StatusResult {
 export interface ExtractionResult {
   draft: ObservationDraft;
   question: string | null;
+  questionField: { field: string; equipmentIndex: number | null } | null;
   inferMs: number;
   sourceText: string;
 }
@@ -160,8 +161,8 @@ export function useStore() {
   }, []);
 
   const extract = useCallback(async (text: string): Promise<ExtractionResult> => {
-    const { draft, question, inferMs } = await extractObservation(text.trim(), lang);
-    return { draft, question, inferMs, sourceText: text.trim() };
+    const { draft, question, questionField, inferMs } = await extractObservation(text.trim(), lang);
+    return { draft, question, questionField, inferMs, sourceText: text.trim() };
   }, [lang]);
 
   const save = useCallback((input: {

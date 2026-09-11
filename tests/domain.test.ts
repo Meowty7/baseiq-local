@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { normalizeDraft, rankMissing, nextQuestion, groundDraft, toEnglishObservation, aggregate360 } from "../shared/observation";
+import { normalizeDraft, rankMissing, nextQuestion, nextQuestionField, groundDraft, toEnglishObservation, aggregate360 } from "../shared/observation";
 
 describe("normalizeDraft", () => {
   test("acepta extracción completa y valida rangos", () => {
@@ -69,6 +69,44 @@ describe("missing priority", () => {
     expect(nextQuestion(incomplete)).toContain("marca");
     const complete = normalizeDraft({ client: "H", city: null, country: null, equipment: [], missing: [] });
     expect(nextQuestion(complete)).toBeNull();
+  });
+
+  test("modalidad y cantidad ganan a ciudad/país", () => {
+    const d = normalizeDraft({ client: "H", city: null, country: null, equipment: [], missing: ["city", "country", "modality"] });
+    expect(nextQuestionField(d)?.field).toBe("modality");
+  });
+
+  test("ciudad y país se agrupan en una sola pregunta de ubicación", () => {
+    const d = normalizeDraft({ client: "H", city: null, country: null, equipment: [], missing: ["city", "country"] });
+    expect(rankMissing(d)).toEqual(["location"]);
+    expect(nextQuestion(d)).toMatch(/ciudad.*país|city.*country/i);
+  });
+
+  test("una marca faltante pesa más que una antigüedad faltante", () => {
+    const d = normalizeDraft({
+      client: "H", city: "C", country: "P",
+      equipment: [
+        { modality: "resonador", quantity: 1, brand: null, model: "X", ageYears: 3, evidence: null },
+        { modality: "tomografo", quantity: 1, brand: null, model: "Y", ageYears: null, evidence: null },
+      ],
+      missing: ["brand.0", "brand.1", "ageYears.1"],
+    });
+    expect(nextQuestionField(d)?.field).toBe("brand");
+  });
+
+  test("marca faltante en varios equipos se pregunta uno por uno, en orden, no agrupada", () => {
+    const d = normalizeDraft({
+      client: "H", city: "C", country: "P",
+      equipment: [
+        { modality: "resonador", quantity: 1, brand: null, model: null, ageYears: null, evidence: null },
+        { modality: "tomografo", quantity: 1, brand: null, model: null, ageYears: null, evidence: null },
+      ],
+      missing: ["brand.0", "brand.1"],
+    });
+    // Both rows keep their own candidate — asked in equipment order, not collapsed into one generic question.
+    expect(rankMissing(d)).toEqual(["brand.0", "brand.1"]);
+    expect(nextQuestionField(d)).toEqual({ field: "brand", equipmentIndex: 0 });
+    expect(nextQuestion(d)).toContain("1");
   });
 });
 
