@@ -10,10 +10,10 @@ import { ThemeProvider, font, useTheme, type Theme } from "./src/ui/theme";
 
 type Tab = "capture" | "records" | "insights";
 
-const TABS: { key: Tab; icon: string; label: string; title: string }[] = [
-  { key: "capture", icon: "＋", label: "Captura", title: "" },
-  { key: "records", icon: "☰", label: "Registros", title: "Registros" },
-  { key: "insights", icon: "◈", label: "Insights", title: "Insights" },
+const TABS: { key: Tab; icon: string; label: string }[] = [
+  { key: "capture", icon: "＋", label: "Captura" },
+  { key: "records", icon: "☰", label: "Registros" },
+  { key: "insights", icon: "◈", label: "Insights" },
 ];
 
 export default function App() {
@@ -25,7 +25,7 @@ export default function App() {
 }
 
 function AppShell() {
-  const { theme } = useTheme();
+  const { theme, toggleMode } = useTheme();
   const styles = makeStyles(theme);
   const [fontsLoaded] = useFonts({ Inter_400Regular, Inter_500Medium, Inter_600SemiBold });
   const store = useStore();
@@ -40,7 +40,6 @@ function AppShell() {
 
   if (!fontsLoaded) return <SafeAreaView style={styles.safe} />;
 
-  const current = TABS.find((t) => t.key === activeTab)!;
   const aiLabel = captureBusy && activeTab !== "capture"
     ? "Extracción en curso en Capturar…"
     : store.status.ready
@@ -52,11 +51,19 @@ function AppShell() {
       <StatusBar barStyle={theme.mode === "dark" ? "light-content" : "dark-content"} backgroundColor={theme.color.surface} />
 
       <View style={styles.header}>
-        {current.title ? <Text style={theme.type.title}>{current.title}</Text> : null}
         <View style={styles.aiStatus}>
           <View style={[styles.dot, { backgroundColor: captureBusy ? theme.color.warn : store.status.ready ? theme.color.ok : theme.color.textTertiary }]} />
           <Text style={theme.type.caption}>{aiLabel}</Text>
         </View>
+        <Pressable
+          onPress={toggleMode}
+          accessibilityRole="button"
+          accessibilityLabel={theme.mode === "dark" ? "Cambiar a modo diurno" : "Cambiar a modo nocturno"}
+          hitSlop={8}
+          style={styles.themeBtn}
+        >
+          <Text style={styles.themeBtnIcon}>{theme.mode === "dark" ? "☀️" : "🌙"}</Text>
+        </Pressable>
       </View>
 
       <View style={styles.body}>
@@ -94,11 +101,14 @@ function makeStyles(theme: Theme) {
   return StyleSheet.create({
     safe: { flex: 1, backgroundColor: color.bg },
     header: {
+      flexDirection: "row", alignItems: "center", justifyContent: "space-between",
       backgroundColor: color.surface, paddingHorizontal: 16, paddingTop: 12, paddingBottom: 12,
-      borderBottomWidth: 1, borderBottomColor: color.border, gap: 4,
+      borderBottomWidth: 1, borderBottomColor: color.border,
     },
-    aiStatus: { flexDirection: "row", alignItems: "center", gap: 6 },
+    aiStatus: { flexDirection: "row", alignItems: "center", gap: 6, flexShrink: 1 },
     dot: { width: 6, height: 6, borderRadius: 3 },
+    themeBtn: { paddingHorizontal: 4, paddingVertical: 2, flexShrink: 0, marginLeft: 8 },
+    themeBtnIcon: { fontSize: 18 },
     body: { flex: 1 },
     panel: { ...StyleSheet.absoluteFill },
     panelHidden: { opacity: 0 },
