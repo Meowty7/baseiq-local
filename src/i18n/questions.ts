@@ -11,6 +11,9 @@ export const QUESTION_FIELDS = [
   "brand.n",
   "model.n",
   "ageYears.n",
+  "submittedBy",
+  "observedAt",
+  "sourceType",
 ] as const;
 
 export type QuestionField = (typeof QUESTION_FIELDS)[number];
@@ -29,6 +32,9 @@ export const QUESTIONS: { es: Record<string, string>; en: Record<string, string>
     "brand.n": "¿De qué marca es el equipo {n}?",
     "model.n": "¿Cuál es el modelo del equipo {n}?",
     "ageYears.n": "¿Qué antigüedad aproximada tiene el equipo {n} (años)?",
+    submittedBy: "¿Quién observó esto?",
+    observedAt: "¿Qué fecha tuvo la observación? (AAAA-MM-DD)",
+    sourceType: "¿Cuál fue la fuente: visita, llamada o reporte?",
   },
   en: {
     client: "Which hospital or clinic was this observation made at?",
@@ -43,6 +49,9 @@ export const QUESTIONS: { es: Record<string, string>; en: Record<string, string>
     "brand.n": "What brand is equipment {n}?",
     "model.n": "What is the model of equipment {n}?",
     "ageYears.n": "Approximately how old is equipment {n} (in years)?",
+    submittedBy: "Who observed this?",
+    observedAt: "What date was the observation? (YYYY-MM-DD)",
+    sourceType: "What was the source: visit, call, or report?",
   },
 };
 

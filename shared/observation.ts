@@ -492,7 +492,7 @@ function acceptClient(raw: string | null, sourceText?: string): string | null {
   return name;
 }
 
-function normalizeModality(value: unknown): Modality | null {
+export function normalizeModality(value: unknown): Modality | null {
   if (typeof value !== "string") return null;
   const clean = stripAccents(value.toLowerCase().trim()).replace(/[\s_]+/g, "-");
   if (MODALITY_ALIASES[clean]) return MODALITY_ALIASES[clean];

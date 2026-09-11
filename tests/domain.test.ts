@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
   normalizeDraft, rankMissing, nextQuestion, nextQuestionField,
-  nextQuestionFieldExcluding, nextQuestionExcluding,
+  nextQuestionFieldExcluding, nextQuestionExcluding, normalizeModality,
   groundDraft, toEnglishObservation, aggregate360,
 } from "../shared/observation";
 
@@ -47,6 +47,16 @@ describe("normalizeDraft", () => {
       });
       expect(d.equipment[0].modality).toBe(id);
     }
+  });
+
+  // normalizeModality is used directly (not just through normalizeDraft) to
+  // interpret a review-question answer like "resonador" inline, without a
+  // model round-trip — this documents that public contract.
+  test("normalizeModality interpreta respuestas de texto libre a follow-up questions", () => {
+    expect(normalizeModality("resonador")).toBe("resonador");
+    expect(normalizeModality("MRI")).toBe("resonador");
+    expect(normalizeModality("tomógrafos")).toBe("tomografo");
+    expect(normalizeModality("no sé qué es")).toBeNull();
   });
 
   test("convierte ausencias e inválidos a null", () => {

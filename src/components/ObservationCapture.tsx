@@ -1,11 +1,12 @@
 import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from "react";
 import { getDevice } from "../lib/qvac";
 import { ActivityIndicator, Keyboard, KeyboardAvoidingView, Platform, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
-import { appendFollowUp, MODALITIES, nextQuestion, nextQuestionExcluding, nextQuestionFieldExcluding, type Modality, type ObservationDraft } from "../../shared/observation";
+import { MODALITIES, nextQuestionFieldExcluding, normalizeModality, type Modality, type ObservationDraft } from "../../shared/observation";
 import { type useStore, OBSERVATION_STATUSES, SOURCE_TYPES } from "../lib/store";
 import { Button, Card, Input, Select } from "../ui/primitives";
 import { radius, space, useTheme, type Theme } from "../ui/theme";
 import { modalityLabels, statusLabels, useI18n } from "../i18n";
+import { getQuestion } from "../i18n/questions";
 
 type Store = ReturnType<typeof useStore>;
 
@@ -30,6 +31,21 @@ const msg = (role: Msg["role"], text: string, caption?: string): Msg => ({ id: m
 function missingFieldKey(f: { field: string; equipmentIndex: number | null }): string {
   return f.equipmentIndex == null ? f.field : `${f.field}.${f.equipmentIndex}`;
 }
+
+// Who-submitted / when / source aren't part of ObservationDraft (the model
+// never fills them — they're always asked at the end, in this fixed order)
+// so they're ranked separately from the draft's own missing-field scoring,
+// once that's exhausted.
+const META_FIELDS = ["submittedBy", "observedAt", "sourceType"] as const;
+type MetaField = (typeof META_FIELDS)[number];
+
+interface ReviewQuestion {
+  kind: "draft" | "meta";
+  field: string;
+  equipmentIndex: number | null;
+}
+
+const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 
 export interface ObservationCaptureHandle {
   /** Backs out of an in-progress draft/result review. Returns true if it handled (and consumed) the back press. */
@@ -110,8 +126,41 @@ export const ObservationCapture = forwardRef<ObservationCaptureHandle, { store: 
   }, [loading]);
 
   const push = (...items: Msg[]) => setMessages((prev) => [...prev, ...items]);
-  const reviewQuestionField = draft && reviewing ? nextQuestionFieldExcluding(draft, skippedFields) : null;
-  const awaitingAnswer = reviewing && !!reviewQuestionField;
+
+  // Who-submitted / when / source are form state, not part of the draft, so
+  // their "missing" check reads submittedBy/observedAt/sourceType directly.
+  // Asked in fixed order, only once every draft field has been resolved.
+  function nextMetaField(skip: ReadonlySet<string>, meta: { submittedBy: string; observedAt: string; sourceType: string }): MetaField | null {
+    for (const f of META_FIELDS) {
+      if (skip.has(`meta.${f}`)) continue;
+      if (f === "submittedBy" && !meta.submittedBy.trim()) return f;
+      if (f === "observedAt" && !meta.observedAt.trim()) return f;
+      if (f === "sourceType" && !meta.sourceType) return f;
+    }
+    return null;
+  }
+
+  function getReviewQuestion(
+    d: ObservationDraft | null,
+    skip: ReadonlySet<string>,
+    meta: { submittedBy: string; observedAt: string; sourceType: string },
+  ): ReviewQuestion | null {
+    if (!d) return null;
+    const draftField = nextQuestionFieldExcluding(d, skip);
+    if (draftField) return { kind: "draft", field: draftField.field, equipmentIndex: draftField.equipmentIndex };
+    const meta_ = nextMetaField(skip, meta);
+    return meta_ ? { kind: "meta", field: meta_, equipmentIndex: null } : null;
+  }
+
+  function questionTextFor(q: ReviewQuestion, d: ObservationDraft | null): string {
+    if (q.kind === "meta") return getQuestion(q.field, lang);
+    const equipmentNumber = q.equipmentIndex != null && d && d.equipment.length > 1 ? q.equipmentIndex + 1 : undefined;
+    return getQuestion(q.field, lang, equipmentNumber);
+  }
+
+  const currentMeta = { submittedBy, observedAt, sourceType };
+  const reviewQuestion = reviewing ? getReviewQuestion(draft, skippedFields, currentMeta) : null;
+  const awaitingAnswer = !!reviewQuestion;
 
   async function extract() {
     if (text.trim().length < 10 || loading) return;
@@ -120,40 +169,17 @@ export const ObservationCapture = forwardRef<ObservationCaptureHandle, { store: 
     setText("");
     setSaved(false);
     setReviewing(false);
-    await runExtraction(transcriptRef.current, false);
-  }
-
-  async function answerFollowUp() {
-    if (!draft || !reviewQuestionField || text.trim().length < 2 || loading) return;
-    transcriptRef.current = appendFollowUp(transcriptRef.current, text);
-    push(msg("user", text.trim()));
-    setText("");
-    await runExtraction(transcriptRef.current, true);
-  }
-
-  async function runExtraction(input: string, duringReview: boolean) {
     setLoading(true);
     setError(null);
     try {
-      const res = await store.extract(input);
+      const res = await store.extract(transcriptRef.current);
       setResult(res);
       setDraft(JSON.parse(JSON.stringify(res.draft)));
-      // A fresh extraction (new observation or an answer given during review)
-      // resets which fields were skipped — the model just re-derived the
-      // whole draft, so a field skipped before may now be filled, and any
-      // still missing deserves to be asked about again in its new context.
-      setSkippedFields(new Set());
       const dev = getDevice()?.toUpperCase() ?? "?";
-      const items = [msg("assistant", t("capture.understood"), t("capture.inferCaption", { sec: (res.inferMs / 1000).toFixed(1), device: dev }))];
-      // Outside review, no question is asked here — that only happens after
-      // the user presses Save. During review, keep going through missing
-      // fields one at a time, or wrap up with the final summary once none
-      // are left (nothing is saved until the user confirms that summary).
-      if (duringReview) {
-        const q = nextQuestion(res.draft, lang);
-        items.push(msg("assistant", q ?? t("capture.reviewDone")));
-      }
-      push(...items);
+      // No question is asked here — that only happens after the user presses
+      // Save, so a first extraction never triggers the "Extrayendo…" popup
+      // again on every follow-up answer the way re-extracting used to.
+      push(msg("assistant", t("capture.understood"), t("capture.inferCaption", { sec: (res.inferMs / 1000).toFixed(1), device: dev })));
     } catch (e) {
       const code = e instanceof Error ? e.message : "extract_failed";
       setError(
@@ -167,12 +193,104 @@ export const ObservationCapture = forwardRef<ObservationCaptureHandle, { store: 
     }
   }
 
+  /**
+   * Applies a review answer straight to the relevant field — no re-running
+   * the model. Re-extracting on every answer used to risk the model
+   * "forgetting" data it had already captured when re-deriving the whole
+   * draft from a growing transcript, and it re-triggered the loading
+   * indicator on every single follow-up turn. Numeric/enum fields are
+   * validated before being written; on a bad answer the same question is
+   * re-asked instead of silently accepting garbage.
+   *
+   * Returns the resulting draft/meta explicitly (rather than only calling
+   * setDraft/setSubmittedBy/…) because React state updates aren't visible
+   * until the next render — the caller needs the up-to-date values *now* to
+   * decide what to ask next in the same turn.
+   */
+  function applyReviewAnswer(
+    q: ReviewQuestion,
+    raw: string,
+  ): { ok: true; draft: ObservationDraft | null; meta: typeof currentMeta } | { ok: false; error: string } {
+    const value = raw.trim();
+    if (q.kind === "meta") {
+      if (q.field === "submittedBy") {
+        setSubmittedBy(value);
+        return { ok: true, draft, meta: { ...currentMeta, submittedBy: value } };
+      }
+      if (q.field === "observedAt") {
+        if (!DATE_RE.test(value)) return { ok: false, error: t("capture.badDate") };
+        setObservedAt(value);
+        return { ok: true, draft, meta: { ...currentMeta, observedAt: value } };
+      }
+      const match = SOURCE_TYPES.find((s) => s === value.toLowerCase() || t(`source.${s}`).toLowerCase() === value.toLowerCase());
+      if (!match) return { ok: false, error: t("capture.badSource", { options: SOURCE_TYPES.map((s) => t(`source.${s}`)).join(", ") }) };
+      setSourceType(match);
+      return { ok: true, draft, meta: { ...currentMeta, sourceType: match } };
+    }
+    if (!draft) return { ok: false, error: "no_draft" };
+    const idx = q.equipmentIndex;
+    if (q.field === "client") {
+      const next = { ...draft, client: value };
+      setDraft(next);
+      return { ok: true, draft: next, meta: currentMeta };
+    }
+    if (q.field === "location") {
+      // A single answer to the combined "city and country" question — split on the first comma if present.
+      const [c1, c2] = value.split(",").map((s) => s.trim());
+      const next = { ...draft, city: c1 || null, country: c2 || c1 || null };
+      setDraft(next);
+      return { ok: true, draft: next, meta: currentMeta };
+    }
+    if (q.field === "modality") {
+      const mod = normalizeModality(value);
+      if (!mod) return { ok: false, error: t("capture.badModality") };
+      const eq = [...draft.equipment];
+      if (idx != null && eq[idx]) eq[idx] = { ...eq[idx], modality: mod };
+      const next = { ...draft, equipment: eq };
+      setDraft(next);
+      return { ok: true, draft: next, meta: currentMeta };
+    }
+    if (q.field === "quantity" || q.field === "ageYears") {
+      const n = parseInt(value, 10);
+      if (!Number.isFinite(n) || String(n) !== value.replace(/^\+/, "")) return { ok: false, error: t("capture.badNumber") };
+      const eq = [...draft.equipment];
+      if (idx != null && eq[idx]) eq[idx] = { ...eq[idx], [q.field]: n };
+      const next = { ...draft, equipment: eq };
+      setDraft(next);
+      return { ok: true, draft: next, meta: currentMeta };
+    }
+    if (q.field === "brand" || q.field === "model") {
+      const eq = [...draft.equipment];
+      if (idx != null && eq[idx]) eq[idx] = { ...eq[idx], [q.field]: value };
+      const next = { ...draft, equipment: eq };
+      setDraft(next);
+      return { ok: true, draft: next, meta: currentMeta };
+    }
+    return { ok: false, error: "unknown_field" };
+  }
+
+  function answerFollowUp() {
+    if (!reviewQuestion || text.trim().length < 1 || loading) return;
+    const answer = text.trim();
+    push(msg("user", answer));
+    setText("");
+    const applied = applyReviewAnswer(reviewQuestion, answer);
+    if (!applied.ok) {
+      push(msg("assistant", applied.error));
+      push(msg("assistant", questionTextFor(reviewQuestion, draft)));
+      return;
+    }
+    const next = getReviewQuestion(applied.draft, skippedFields, applied.meta);
+    push(msg("assistant", next ? questionTextFor(next, applied.draft) : t("capture.reviewDone")));
+  }
+
   function skipReviewQuestion() {
-    if (!reviewQuestionField || !draft) return;
-    const nextSkipped = new Set(skippedFields).add(missingFieldKey(reviewQuestionField));
+    if (!reviewQuestion) return;
+    const key = reviewQuestion.kind === "meta" ? `meta.${reviewQuestion.field}` : missingFieldKey(reviewQuestion);
+    const nextSkipped = new Set(skippedFields).add(key);
     setSkippedFields(nextSkipped);
-    const q = nextQuestionExcluding(draft, nextSkipped, lang);
-    push(msg("assistant", q ?? t("capture.reviewDone")));
+    const next = getReviewQuestion(draft, nextSkipped, currentMeta);
+    push(msg("assistant", next ? questionTextFor(next, draft) : t("capture.reviewDone")));
   }
 
   /** Save button: starts the missing-field review if anything's missing, otherwise saves right away. */
@@ -182,12 +300,12 @@ export const ObservationCapture = forwardRef<ObservationCaptureHandle, { store: 
       setError(t("capture.missingClient"));
       return;
     }
-    if (draft.missing.length > 0) {
+    const firstQuestion = getReviewQuestion(draft, new Set(), currentMeta);
+    if (firstQuestion) {
       setReviewing(true);
       setSkippedFields(new Set());
       push(msg("assistant", t("capture.reviewStart")));
-      const q = nextQuestion(draft, lang);
-      if (q) push(msg("assistant", q));
+      push(msg("assistant", questionTextFor(firstQuestion, draft)));
       return;
     }
     commitSave(nextStatus);
