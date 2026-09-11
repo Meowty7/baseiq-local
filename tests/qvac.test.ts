@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { isMissingModelError, isTranslatorReady } from "../src/lib/qvac";
+import { isMissingModelError, isTranslatorReady, isWhisperReady, isVisionReady } from "../src/lib/qvac";
 import { pickObservationEnglish } from "../src/lib/extraction";
 
 test("detecta reinicio del worker por modelo perdido", () => {
@@ -10,6 +10,11 @@ test("detecta reinicio del worker por modelo perdido", () => {
 test("el traductor no está listo hasta loadModel", () => {
   expect(isTranslatorReady()).toBe(false);
   expect(isTranslatorReady("es", "en")).toBe(false);
+});
+
+test("whisper y vision no están listos hasta loadModel", () => {
+  expect(isWhisperReady()).toBe(false);
+  expect(isVisionReady()).toBe(false);
 });
 
 test("pickObservationEnglish usa NMT si hay texto y cae al regex si no", () => {

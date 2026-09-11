@@ -1,5 +1,5 @@
 import { EXTRACTION_SCHEMA, normalizeDraft, nextQuestion, groundDraft, toEnglishObservation, type ObservationDraft } from "../../shared/observation";
-import { inferJson, translateNote } from "./qvac";
+import { inferJson, inferJsonWithImage, translateNote } from "./qvac";
 
 const SYSTEM =
   "Extract inventory. JSON only. No invent. Absent field = null. Keep original names. " +
@@ -7,6 +7,12 @@ const SYSTEM =
   "client = named hospital/clinic from input. clinic of city only = null. NEVER invent client names or copy examples. " +
   'in: I saw CT at Saint Jude  out: {"client":"Saint Jude","city":null,"country":null,"equipment":[{"modality":"CT","quantity":1,"brand":null,"model":null,"ageYears":null,"evidence":"I saw CT"}],"missing":["city","country","brand","model","ageYears"]} ' +
   "/no_think";
+
+const SYSTEM_VISION =
+  "Extract inventory from the photo. JSON only. Only what is visible on the equipment nameplate or room. " +
+  "Absent field = null. modality: MRI | CT | ultrasound | X-ray | mammograph | other. " +
+  "evidence: short quote of text visible on the nameplate. brand/model: only if printed on the plate. " +
+  "client: hospital name only if visible on a sign. quantity: count units in the photo. /no_think";
 
 export type TranslateVia = "nmt" | "regex";
 
@@ -51,6 +57,35 @@ export async function extractObservation(
     } catch (err) {
       lastError = err;
       if (err instanceof Error) console.warn(`extract attempt ${attempt + 1} failed: ${err.message}`);
+      if (!retryableInferError(err)) break;
+    }
+  }
+  throw lastError instanceof Error ? lastError : new Error("infer_failed");
+}
+
+export async function extractObservationFromImage(
+  uri: string,
+  lang = "es",
+): Promise<{ draft: ObservationDraft; question: string | null; inferMs: number }> {
+  let lastError: unknown = null;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      const { text: raw, inferMs } = await inferJsonWithImage(SYSTEM_VISION, "Extract the inventory from this photo.", uri, EXTRACTION_SCHEMA);
+      const draft = normalizeDraft(JSON.parse(raw.trim()));
+      // For images there is no source text to ground against. The VLM counted units
+      // and read the nameplate directly, so keep its quantity/modality/age/client/geo.
+      // Only brand/model get validated against the VLM's own evidence quotes: a brand
+      // not printed on the plate it read is almost certainly a hallucination.
+      const evidenceLow = draft.equipment.map((e) => e.evidence ?? "").join(" ").toLowerCase();
+      for (const eq of draft.equipment) {
+        if (eq.brand && !evidenceLow.includes(eq.brand.toLowerCase())) eq.brand = null;
+        if (eq.model && !evidenceLow.includes(eq.model.toLowerCase())) eq.model = null;
+      }
+      draft.missing = computeMissing(draft);
+      return { draft, question: nextQuestion(draft, lang), inferMs };
+    } catch (err) {
+      lastError = err;
+      if (err instanceof Error) console.warn(`extract image attempt ${attempt + 1} failed: ${err.message}`);
       if (!retryableInferError(err)) break;
     }
   }

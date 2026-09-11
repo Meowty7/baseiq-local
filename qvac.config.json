@@ -1,7 +1,8 @@
 {
   "plugins": [
     "@qvac/sdk/llamacpp-completion/plugin",
-    "@qvac/sdk/nmtcpp-translation/plugin"
+    "@qvac/sdk/nmtcpp-translation/plugin",
+    "@qvac/sdk/whispercpp-transcription/plugin"
   ],
   "loggerLevel": "info",
   "loggerConsoleOutput": true

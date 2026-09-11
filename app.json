@@ -9,7 +9,10 @@
     "android": {
       "package": "dev.belta.baseiq",
       "minSdkVersion": 29,
-      "permissions": []
+      "permissions": [
+        "android.permission.RECORD_AUDIO",
+        "android.permission.CAMERA"
+      ]
     },
     "plugins": [
       [
@@ -22,6 +25,8 @@
       ],
       "@qvac/sdk/expo-plugin",
       "expo-sqlite",
+      "expo-audio",
+      "expo-image-picker",
       "./plugins/withAndroidGradleMemory.js"
     ]
   }

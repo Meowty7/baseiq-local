@@ -6,6 +6,8 @@ import { type useStore, OBSERVATION_STATUSES, SOURCE_TYPES } from "../lib/store"
 import { Button, Card, Input, Select } from "../ui/primitives";
 import { radius, space, useTheme, type Theme } from "../ui/theme";
 import { modalityLabels, statusLabels, useI18n } from "../i18n";
+import { useAudioRecorder, RecordingPresets, requestRecordingPermissionsAsync, setAudioModeAsync } from "expo-audio";
+import * as ImagePicker from "expo-image-picker";
 
 type Store = ReturnType<typeof useStore>;
 
@@ -56,14 +58,18 @@ export const ObservationCapture = forwardRef<ObservationCaptureHandle, { store: 
   const [sourceType, setSourceType] = useState<(typeof SOURCE_TYPES)[number]>("visita");
   const [status, setStatus] = useState<(typeof OBSERVATION_STATUSES)[number]>("Confirmado");
   const [showDetails, setShowDetails] = useState(false);
+  const [recording, setRecording] = useState(false);
+  const [transcribing, setTranscribing] = useState(false);
+  const [analyzingImage, setAnalyzingImage] = useState(false);
   const transcriptRef = useRef("");
   const scrollRef = useRef<ScrollView>(null);
   const [elapsedSec, setElapsedSec] = useState(0);
   const [androidKeyboardHeight, setAndroidKeyboardHeight] = useState(0);
+  const recorder = useAudioRecorder(RecordingPresets.HIGH_QUALITY);
 
   useEffect(() => {
-    onBusyChange?.(loading || saving);
-  }, [loading, saving, onBusyChange]);
+    onBusyChange?.(loading || saving || transcribing || analyzingImage);
+  }, [loading, saving, onBusyChange, transcribing, analyzingImage]);
 
   useEffect(() => {
     setMessages((prev) => {
@@ -143,6 +149,66 @@ export const ObservationCapture = forwardRef<ObservationCaptureHandle, { store: 
       );
     } finally {
       setLoading(false);
+    }
+  }
+
+  async function toggleMic() {
+    if (transcribing || analyzingImage) return;
+    if (recording) {
+      await recorder.stop();
+      setRecording(false);
+      const uri = recorder.uri;
+      if (!uri) return;
+      setTranscribing(true);
+      try {
+        const transcript = await store.transcribe(uri);
+        if (transcript.trim()) setText((prev) => (prev.trim() ? `${prev} ` : "") + transcript.trim());
+      } catch (e) {
+        setError(t("capture.micError"));
+      } finally {
+        setTranscribing(false);
+      }
+      return;
+    }
+    const perm = await requestRecordingPermissionsAsync();
+    if (!perm.granted) {
+      setError(t("capture.micPermission"));
+      return;
+    }
+    await setAudioModeAsync({ playsInSilentMode: true } as Record<string, unknown>);
+    await recorder.prepareToRecordAsync();
+    recorder.record();
+    setRecording(true);
+  }
+
+  async function pickImage() {
+    if (loading || transcribing || analyzingImage || recording) return;
+    const res = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ["images"],
+      quality: 0.7,
+      allowsEditing: false,
+    });
+    if (res.canceled || !res.assets?.[0]?.uri) return;
+    await runImageExtraction(res.assets[0].uri);
+  }
+
+  async function runImageExtraction(uri: string) {
+    setAnalyzingImage(true);
+    setError(null);
+    setResult(null);
+    setQuestionSkipped(false);
+    try {
+      const res = await store.extractImage(uri);
+      setResult(res);
+      setDraft(JSON.parse(JSON.stringify(res.draft)));
+      const dev = getDevice()?.toUpperCase() ?? "?";
+      const items = [msg("assistant", t("capture.understood"), t("capture.inferCaption", { sec: (res.inferMs / 1000).toFixed(1), device: dev }))];
+      if (res.question) items.push(msg("assistant", res.question));
+      push(...items);
+    } catch (e) {
+      setError(t("capture.imageError"));
+    } finally {
+      setAnalyzingImage(false);
     }
   }
 
@@ -240,6 +306,13 @@ export const ObservationCapture = forwardRef<ObservationCaptureHandle, { store: 
           </View>
         )}
 
+        {(transcribing || analyzingImage) && (
+          <View style={[styles.bubble, styles.assistant, styles.loadingRow]}>
+            <ActivityIndicator color={theme.color.textSecondary} />
+            <Text style={theme.type.body}>{transcribing ? t("capture.transcribing") : t("capture.analyzingImage")}</Text>
+          </View>
+        )}
+
         {result && draft && (
           <>
             <Card style={styles.draftCard}>
@@ -307,15 +380,37 @@ export const ObservationCapture = forwardRef<ObservationCaptureHandle, { store: 
           </View>
         )}
         <View style={styles.sendRow}>
+          {lang === "es" && (
+            <Pressable
+              onPress={toggleMic}
+              disabled={transcribing || analyzingImage}
+              accessibilityRole="button"
+              accessibilityLabel={t("capture.mic")}
+              hitSlop={8}
+              style={[styles.iconBtn, recording && styles.iconBtnActive]}
+            >
+              <Text style={styles.iconBtnText}>{recording ? "⏹" : "🎤"}</Text>
+            </Pressable>
+          )}
+          <Pressable
+            onPress={pickImage}
+            disabled={loading || transcribing || analyzingImage || recording}
+            accessibilityRole="button"
+            accessibilityLabel={t("capture.image")}
+            hitSlop={8}
+            style={[styles.iconBtn, analyzingImage && styles.iconBtnActive]}
+          >
+            <Text style={styles.iconBtnText}>📷</Text>
+          </Pressable>
           <Input
             style={{ flex: 1 }}
             value={text}
             onChangeText={setText}
             multiline
             inputStyle={styles.composerInput}
-            placeholder={awaitingAnswer ? t("capture.placeholderMore") : t("capture.placeholder")}
+            placeholder={recording ? t("capture.recording") : awaitingAnswer ? t("capture.placeholderMore") : t("capture.placeholder")}
           />
-          <Button label={t("capture.send")} onPress={awaitingAnswer ? answerFollowUp : extract} disabled={!canSend} style={styles.sendBtn} />
+          <Button label={t("capture.send")} onPress={awaitingAnswer ? answerFollowUp : extract} disabled={!canSend || recording} style={styles.sendBtn} />
         </View>
       </View>
     </KeyboardAvoidingView>
@@ -363,5 +458,8 @@ function makeStyles(theme: Theme) {
     sendRow: { flexDirection: "row", alignItems: "flex-end", gap: space.sm },
     sendBtn: { minHeight: 44, paddingHorizontal: space.md },
     composerInput: { minHeight: 44, maxHeight: 120 },
+    iconBtn: { minHeight: 44, width: 44, alignItems: "center", justifyContent: "center", borderRadius: radius.md, borderWidth: StyleSheet.hairlineWidth, borderColor: color.border, backgroundColor: color.surfaceMuted },
+    iconBtnActive: { backgroundColor: color.danger },
+    iconBtnText: { fontSize: 20 },
   });
 }

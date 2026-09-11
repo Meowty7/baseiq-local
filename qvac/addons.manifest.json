@@ -4,6 +4,7 @@
   "addons": [
     "@qvac/llm-llamacpp",
     "@qvac/translation-nmtcpp",
+    "@qvac/asr-ggml",
     "bare-buffer",
     "bare-cpu-info",
     "bare-crypto",
