@@ -1,0 +1,10 @@
+[
+  {
+    "text": "Estou no Hospital DemoCare Pacific, no Panamá. Vi dois ressonadores e um tomógrafo. Um dos ressonadores parece ter uns oito anos.",
+    "expect": { "client": "Hospital DemoCare Pacific", "city": null, "country": "Panamá", "modalities": ["resonador", "tomografo"], "quantities": { "resonador": 2, "tomografo": 1 } }
+  },
+  {
+    "text": "Clínica Brisa do Norte, Bogotá, Colômbia. Três ecógrafos Novascan, modelo NS-200, de uns cinco anos.",
+    "expect": { "client": "Clínica Brisa do Norte", "city": "Bogotá", "country": "Colômbia", "modalities": ["ecografo"], "quantities": { "ecografo": 3 } }
+  }
+]

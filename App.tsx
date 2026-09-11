@@ -9,13 +9,16 @@ import { ObservationCapture, type ObservationCaptureHandle } from "./src/compone
 import { RecordsTab, type RecordsTabHandle } from "./src/components/RecordsTab";
 import { InsightsTab } from "./src/components/InsightsTab";
 import { ThemeProvider, font, useTheme, type Theme } from "./src/ui/theme";
+import { I18nProvider, LANG_CODES, LANG_PICKER_LABELS, useI18n, type Lang } from "./src/i18n";
+import { Select } from "./src/ui/primitives";
 
 type Tab = "capture" | "records" | "insights";
+type Store = ReturnType<typeof useStore>;
 
-const TABS: { key: Tab; icon: string; label: string }[] = [
-  { key: "capture", icon: "＋", label: "Captura" },
-  { key: "records", icon: "☰", label: "Registros" },
-  { key: "insights", icon: "◈", label: "Insights" },
+const TAB_META: { key: Tab; icon: string; labelKey: string }[] = [
+  { key: "capture", icon: "＋", labelKey: "tab.capture" },
+  { key: "records", icon: "☰", labelKey: "tab.records" },
+  { key: "insights", icon: "◈", labelKey: "tab.insights" },
 ];
 
 const SWIPE_DISTANCE = 60;
@@ -30,10 +33,24 @@ export default function App() {
 }
 
 function AppShell() {
-  const { theme, toggleMode } = useTheme();
-  const styles = makeStyles(theme);
   const [fontsLoaded] = useFonts({ Inter_400Regular, Inter_500Medium, Inter_600SemiBold });
   const store = useStore();
+  const { theme } = useTheme();
+  const styles = makeStyles(theme);
+
+  if (!fontsLoaded) return <SafeAreaView style={styles.safe} />;
+
+  return (
+    <I18nProvider lang={store.lang} localizing={store.uiLocalizing}>
+      <AppChrome store={store} />
+    </I18nProvider>
+  );
+}
+
+function AppChrome({ store }: { store: Store }) {
+  const { theme, toggleMode } = useTheme();
+  const { t, localizing } = useI18n();
+  const styles = makeStyles(theme);
   const [activeTab, setActiveTab] = useState<Tab>("capture");
   const activeTabRef = useRef(activeTab);
   activeTabRef.current = activeTab;
@@ -80,20 +97,22 @@ function AppShell() {
       onMoveShouldSetPanResponder: (_, g) =>
         Math.abs(g.dx) > 20 && Math.abs(g.dx) > Math.abs(g.dy) * SWIPE_DIRECTION_RATIO,
       onPanResponderRelease: (_, g) => {
-        const idx = TABS.findIndex((t) => t.key === activeTabRef.current);
-        if (g.dx <= -SWIPE_DISTANCE && idx < TABS.length - 1) setActiveTab(TABS[idx + 1].key);
-        else if (g.dx >= SWIPE_DISTANCE && idx > 0) setActiveTab(TABS[idx - 1].key);
+        const idx = TAB_META.findIndex((tab) => tab.key === activeTabRef.current);
+        if (g.dx <= -SWIPE_DISTANCE && idx < TAB_META.length - 1) setActiveTab(TAB_META[idx + 1].key);
+        else if (g.dx >= SWIPE_DISTANCE && idx > 0) setActiveTab(TAB_META[idx - 1].key);
       },
     }),
   ).current;
 
-  if (!fontsLoaded) return <SafeAreaView style={styles.safe} />;
-
-  const aiLabel = captureBusy && activeTab !== "capture"
-    ? "Extracción en curso en Capturar…"
-    : store.status.ready
-      ? `IA local lista${store.status.device ? ` · ${store.status.device.toUpperCase()}` : ""}`
-      : `Cargando modelo${store.progress != null ? ` ${Math.round(store.progress)}%` : "…"}`;
+  const aiLabel = localizing
+    ? (store.uiLocalizeProgress != null ? t("lang.localizingPct", { n: Math.round(store.uiLocalizeProgress) }) : t("lang.localizing"))
+    : captureBusy && activeTab !== "capture"
+      ? t("ai.extracting")
+      : store.status.ready
+        ? t("ai.ready", { device: store.status.device ? ` · ${store.status.device.toUpperCase()}` : "" })
+        : store.progress != null
+          ? t("ai.loadingPct", { n: Math.round(store.progress) })
+          : t("ai.loading");
 
   return (
     <SafeAreaView style={styles.safe}>
@@ -101,18 +120,29 @@ function AppShell() {
 
       <View style={styles.header}>
         <View style={styles.aiStatus}>
-          <View style={[styles.dot, { backgroundColor: captureBusy ? theme.color.warn : store.status.ready ? theme.color.ok : theme.color.textTertiary }]} />
+          <View style={[styles.dot, { backgroundColor: localizing || captureBusy ? theme.color.warn : store.status.ready ? theme.color.ok : theme.color.textTertiary }]} />
           <Text style={theme.type.caption}>{aiLabel}</Text>
         </View>
-        <Pressable
-          onPress={toggleMode}
-          accessibilityRole="button"
-          accessibilityLabel={theme.mode === "dark" ? "Cambiar a modo diurno" : "Cambiar a modo nocturno"}
-          hitSlop={8}
-          style={styles.themeBtn}
-        >
-          <Text style={styles.themeBtnIcon}>{theme.mode === "dark" ? "☀️" : "🌙"}</Text>
-        </Pressable>
+        <View style={styles.headerActions}>
+          <Select
+            style={styles.langSelect}
+            label={undefined}
+            value={store.lang}
+            options={LANG_CODES}
+            labels={LANG_PICKER_LABELS}
+            placeholder={t("lang.label")}
+            onChange={(v) => store.setLang(v as Lang)}
+          />
+          <Pressable
+            onPress={toggleMode}
+            accessibilityRole="button"
+            accessibilityLabel={theme.mode === "dark" ? t("theme.toLight") : t("theme.toDark")}
+            hitSlop={8}
+            style={styles.themeBtn}
+          >
+            <Text style={styles.themeBtnIcon}>{theme.mode === "dark" ? "☀️" : "🌙"}</Text>
+          </Pressable>
+        </View>
       </View>
 
       <View style={styles.body} {...panResponder.panHandlers}>
@@ -128,13 +158,13 @@ function AppShell() {
       </View>
 
       <View style={styles.tabBar}>
-        {TABS.map((tab) => {
+        {TAB_META.map((tab) => {
           const active = activeTab === tab.key;
           return (
             <Pressable key={tab.key} style={styles.tabBtn} onPress={() => setActiveTab(tab.key)} accessibilityRole="button" accessibilityState={{ selected: active }}>
               <View style={styles.tabInner}>
                 <Text style={[styles.tabIcon, active && styles.tabIconActive]}>{tab.icon}</Text>
-                <Text style={[styles.tabLabel, active && styles.tabLabelActive]}>{tab.label}</Text>
+                <Text style={[styles.tabLabel, active && styles.tabLabelActive]}>{t(tab.labelKey)}</Text>
                 {tab.key === "capture" && captureBusy && activeTab !== "capture" && <View style={styles.tabBusyDot} />}
               </View>
             </Pressable>
@@ -156,11 +186,13 @@ function makeStyles(theme: Theme) {
       // so the OS clock/battery/wifi icons were sitting on top of this bar.
       paddingTop: (Platform.OS === "android" ? StatusBar.currentHeight ?? 24 : 0) + 12,
       paddingBottom: 12,
-      borderBottomWidth: 1, borderBottomColor: color.border,
+      borderBottomWidth: 1, borderBottomColor: color.border, gap: 8,
     },
-    aiStatus: { flexDirection: "row", alignItems: "center", gap: 6, flexShrink: 1 },
+    aiStatus: { flexDirection: "row", alignItems: "center", gap: 6, flexShrink: 1, minWidth: 0 },
+    headerActions: { flexDirection: "row", alignItems: "center", flexShrink: 0, gap: 4 },
+    langSelect: { width: 148, flexShrink: 0 },
     dot: { width: 6, height: 6, borderRadius: 3 },
-    themeBtn: { paddingHorizontal: 4, paddingVertical: 2, flexShrink: 0, marginLeft: 8 },
+    themeBtn: { paddingHorizontal: 4, paddingVertical: 2, flexShrink: 0 },
     themeBtnIcon: { fontSize: 18 },
     body: { flex: 1 },
     panel: { ...StyleSheet.absoluteFill },

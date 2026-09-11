@@ -1,3 +1,5 @@
+import { getQuestion } from "../src/i18n/questions";
+
 export const OBSERVATION_STATUSES = ["Confirmado", "Reportado", "Estimado", "Desconocido"] as const;
 export type ObservationStatus = (typeof OBSERVATION_STATUSES)[number];
 
@@ -209,21 +211,11 @@ export function rankMissing(draft: ObservationDraft): string[] {
   );
 }
 
-export function nextQuestion(draft: ObservationDraft): string | null {
+export function nextQuestion(draft: ObservationDraft, lang?: string): string | null {
   const top = rankMissing(draft)[0];
   if (!top) return null;
   const field = top.split(".")[0];
-  const labels: Record<string, string> = {
-    client: "¿En qué hospital o clínica se hizo la observación?",
-    modality: "¿Qué tipo de equipo viste (resonador, tomógrafo, ecógrafo)?",
-    quantity: "¿Cuántos equipos de ese tipo hay?",
-    city: "¿En qué ciudad está el cliente?",
-    country: "¿En qué país está el cliente?",
-    brand: "¿De qué marca es el equipo?",
-    model: "¿Cuál es el modelo del equipo?",
-    ageYears: "¿Qué antigüedad aproximada tiene el equipo (años)?",
-  };
-  return labels[field] ?? `¿Puedes precisar ${field}?`;
+  return getQuestion(field, lang ?? "es");
 }
 
 export const MODALITY_GLOSSARY: { id: Modality; es: string; en: string }[] = [

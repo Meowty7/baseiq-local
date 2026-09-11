@@ -3,6 +3,7 @@ import {
   ActivityIndicator,
   Modal,
   Pressable,
+  ScrollView,
   StyleSheet,
   Text,
   TextInput,
@@ -203,6 +204,7 @@ export function Select<T extends string>({
         <Pressable style={styles.backdrop} onPress={() => setOpen(false)}>
           <View style={styles.sheet}>
             {label ? <Text style={[theme.type.caption, styles.sheetTitle]}>{label}</Text> : null}
+            <ScrollView style={styles.sheetScroll} keyboardShouldPersistTaps="handled">
             {options.map((opt, i) => (
               <Pressable
                 key={opt}
@@ -214,6 +216,7 @@ export function Select<T extends string>({
                 {opt === value ? <Text style={styles.check}>✓</Text> : null}
               </Pressable>
             ))}
+            </ScrollView>
           </View>
         </Pressable>
       </Modal>
@@ -256,7 +259,8 @@ function makeStyles(theme: Theme) {
       backgroundColor: color.surface, borderWidth: 1, borderColor: color.border, borderRadius: radius.md, paddingHorizontal: 12, paddingVertical: 10, minHeight: 44,
     },
     backdrop: { flex: 1, backgroundColor: "rgba(17,24,39,0.35)", justifyContent: "flex-end", padding: space.lg },
-    sheet: { backgroundColor: color.surface, borderRadius: radius.lg, overflow: "hidden", paddingVertical: space.xs },
+    sheet: { backgroundColor: color.surface, borderRadius: radius.lg, overflow: "hidden", paddingVertical: space.xs, maxHeight: "70%" },
+    sheetScroll: { maxHeight: 420 },
     sheetTitle: { paddingHorizontal: space.lg, paddingTop: space.sm, paddingBottom: space.xs },
     sheetItem: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingHorizontal: space.lg, paddingVertical: 14 },
     check: { fontFamily: font.semibold, color: color.text, fontSize: 15 },

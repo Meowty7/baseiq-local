@@ -4,13 +4,18 @@ import {
   getDb, listObservations, saveObservation,
   updateObservation, updateObservationClient, updateEquipment, deleteObservation,
 } from "./db";
-import { ensureModel, isReady, isBusy, getLastInferMs, getDevice, setDeviceOverride, MODEL_NAME } from "./qvac";
+import { ensureModel, ensureTranslator, isReady, isBusy, getLastInferMs, getDevice, setDeviceOverride, MODEL_NAME, releaseUnusedTranslators } from "./qvac";
 import { extractObservation } from "./extraction";
+import { isLang, localizeUi, type Lang } from "../i18n";
 import {
   OBSERVATION_STATUSES, SOURCE_TYPES, freshness, detectConflicts, normalizeDraft,
   type ObservationDraft, type ObservationRecord, type ObservationStatus,
 } from "../../shared/observation";
 import fixtures from "../../fixtures/observations.es.json";
+
+function documentDir(): string {
+  return (FileSystem as unknown as { documentDirectory?: string | null }).documentDirectory ?? "";
+}
 
 export interface OverviewResult {
   observations: number;
@@ -71,6 +76,9 @@ export function useStore() {
   const [observations, setObservations] = useState<ObservationRecord[]>([]);
   const [overview, setOverview] = useState<OverviewResult | null>(null);
   const [progress, setProgress] = useState<number | null>(null);
+  const [lang, setLangState] = useState<Lang>("es");
+  const [uiLocalizing, setUiLocalizing] = useState(false);
+  const [uiLocalizeProgress, setUiLocalizeProgress] = useState<number | null>(null);
 
   const refresh = useCallback(() => {
     const db = getDb();
@@ -103,23 +111,57 @@ export function useStore() {
   useEffect(() => {
     (async () => {
       try {
-        const flag = `${FileSystem.documentDirectory}qvac.device`;
+        const flag = `${documentDir()}qvac.device`;
         const raw = (await FileSystem.readAsStringAsync(flag).catch(() => "")).trim().toLowerCase();
         if (raw === "cpu" || raw === "gpu") setDeviceOverride(raw);
+        const savedLang = (await FileSystem.readAsStringAsync(`${documentDir()}baseiq.lang`).catch(() => "es")).trim();
+        const initial: Lang = isLang(savedLang) ? savedLang : "es";
+        setLangState(initial);
         seedIfEmpty();
-        await ensureModel((pct) => setProgress(pct));
+        if (initial !== "es" && initial !== "en") setUiLocalizing(true);
+        await Promise.all([
+          ensureModel((pct) => setProgress(pct)),
+          ensureTranslator(initial, "en").catch(() => null),
+          localizeUi(initial, (pct) => setUiLocalizeProgress(pct)).catch((err) => {
+            console.warn("ui localize failed:", err);
+          }),
+        ]);
         setProgress(null);
+        setUiLocalizing(false);
+        setUiLocalizeProgress(null);
         refresh();
       } catch (err) {
         console.error("model preload failed:", err);
+        setUiLocalizing(false);
+        setUiLocalizeProgress(null);
       }
     })();
   }, [refresh, seedIfEmpty]);
 
-  const extract = useCallback(async (text: string): Promise<ExtractionResult> => {
-    const { draft, question, inferMs } = await extractObservation(text.trim());
-    return { draft, question, inferMs, sourceText: text.trim() };
+  const setLang = useCallback((next: Lang) => {
+    setLangState(next);
+    void (async () => {
+      try {
+        await FileSystem.writeAsStringAsync(`${documentDir()}baseiq.lang`, next);
+      } catch { /* ignore */ }
+      if (next !== "es" && next !== "en") setUiLocalizing(true);
+      try {
+        await localizeUi(next, (pct) => setUiLocalizeProgress(pct));
+        await ensureTranslator(next, "en");
+        await releaseUnusedTranslators(next);
+      } catch (err) {
+        console.warn("setLang localize failed:", err);
+      } finally {
+        setUiLocalizing(false);
+        setUiLocalizeProgress(null);
+      }
+    })();
   }, []);
+
+  const extract = useCallback(async (text: string): Promise<ExtractionResult> => {
+    const { draft, question, inferMs } = await extractObservation(text.trim(), lang);
+    return { draft, question, inferMs, sourceText: text.trim() };
+  }, [lang]);
 
   const save = useCallback((input: {
     client: string; city: string | null; country: string | null;
@@ -168,5 +210,5 @@ export function useStore() {
     refresh();
   }, [refresh]);
 
-  return { status, observations, overview, progress, refresh, extract, save, update, remove };
+  return { status, observations, overview, progress, lang, setLang, uiLocalizing, uiLocalizeProgress, refresh, extract, save, update, remove };
 }
