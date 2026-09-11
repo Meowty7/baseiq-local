@@ -21,7 +21,8 @@
         }
       ],
       "@qvac/sdk/expo-plugin",
-      "expo-sqlite"
+      "expo-sqlite",
+      "./plugins/withAndroidGradleMemory.js"
     ]
   }
 }
