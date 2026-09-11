@@ -27,7 +27,6 @@
       "expo-sqlite",
       "expo-audio",
       "expo-image-picker",
-      "expo-image-manipulator",
       "./plugins/withAndroidGradleMemory.js"
     ]
   }
