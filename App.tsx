@@ -9,8 +9,7 @@ import { ObservationCapture, type ObservationCaptureHandle } from "./src/compone
 import { RecordsTab, type RecordsTabHandle } from "./src/components/RecordsTab";
 import { InsightsTab } from "./src/components/InsightsTab";
 import { ThemeProvider, font, useTheme, type Theme } from "./src/ui/theme";
-import { I18nProvider, LANG_CODES, LANG_PICKER_LABELS, useI18n, type Lang } from "./src/i18n";
-import { Select } from "./src/ui/primitives";
+import { I18nProvider, useI18n } from "./src/i18n";
 
 type Tab = "capture" | "records" | "insights";
 type Store = ReturnType<typeof useStore>;
@@ -162,15 +161,6 @@ function AppChrome({ store }: { store: Store }) {
           <Text style={theme.type.caption}>{aiLabel}</Text>
         </View>
         <View style={styles.headerActions}>
-          <Select
-            style={styles.langSelect}
-            label={undefined}
-            value={store.lang}
-            options={LANG_CODES}
-            labels={LANG_PICKER_LABELS}
-            placeholder={t("lang.label")}
-            onChange={(v) => store.setLang(v as Lang)}
-          />
           <Pressable
             onPress={toggleMode}
             accessibilityRole="button"
@@ -235,7 +225,6 @@ function makeStyles(theme: Theme) {
     },
     aiStatus: { flexDirection: "row", alignItems: "center", gap: 6, flexShrink: 1, minWidth: 0 },
     headerActions: { flexDirection: "row", alignItems: "center", flexShrink: 0, gap: 4 },
-    langSelect: { width: 148, flexShrink: 0 },
     dot: { width: 6, height: 6, borderRadius: 3 },
     themeBtn: { paddingHorizontal: 4, paddingVertical: 2, flexShrink: 0 },
     themeBtnIcon: { fontSize: 18 },
