@@ -44,6 +44,7 @@ export const ObservationCapture = forwardRef<ObservationCaptureHandle, { store: 
   const [draft, setDraft] = useState<ObservationDraft | null>(null);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
+  const [questionSkipped, setQuestionSkipped] = useState(false);
   const [submittedBy, setSubmittedBy] = useState("");
   const [observedAt, setObservedAt] = useState(new Date().toISOString().slice(0, 10));
   const [sourceType, setSourceType] = useState<(typeof SOURCE_TYPES)[number]>("visita");
@@ -90,7 +91,7 @@ export const ObservationCapture = forwardRef<ObservationCaptureHandle, { store: 
   }, [loading]);
 
   const push = (...items: Msg[]) => setMessages((prev) => [...prev, ...items]);
-  const awaitingAnswer = !!result?.question;
+  const awaitingAnswer = !!result?.question && !questionSkipped;
 
   async function extract() {
     if (text.trim().length < 10 || loading) return;
@@ -113,6 +114,7 @@ export const ObservationCapture = forwardRef<ObservationCaptureHandle, { store: 
     setLoading(true);
     setError(null);
     setResult(null);
+    setQuestionSkipped(false);
     try {
       const res = await store.extract(input);
       setResult(res);
@@ -186,6 +188,7 @@ export const ObservationCapture = forwardRef<ObservationCaptureHandle, { store: 
     setDraft(null);
     setError(null);
     setSaved(false);
+    setQuestionSkipped(false);
     setText("");
     transcriptRef.current = "";
   }
@@ -254,9 +257,18 @@ export const ObservationCapture = forwardRef<ObservationCaptureHandle, { store: 
             </Card>
 
             <View style={[styles.bubble, styles.assistant, { gap: space.md }]}>
-              <Text style={theme.type.body}>Cuando esté correcto, elige el estado y guarda.</Text>
+              <Text style={theme.type.body}>
+                {awaitingAnswer
+                  ? "Responde la pregunta de arriba antes de guardar (o sáltala si no tienes ese dato)."
+                  : "Cuando esté correcto, elige el estado y guarda."}
+              </Text>
               <Select label="Estado" value={status} options={OBSERVATION_STATUSES} onChange={setStatus} />
-              <Button label="Guardar observación" onPress={() => confirm(status)} loading={saving} />
+              <Button label="Guardar observación" onPress={() => confirm(status)} loading={saving} disabled={awaitingAnswer} />
+              {awaitingAnswer && (
+                <Pressable onPress={() => setQuestionSkipped(true)} accessibilityRole="button" hitSlop={8}>
+                  <Text style={styles.link}>Omitir pregunta y guardar de todos modos</Text>
+                </Pressable>
+              )}
             </View>
           </>
         )}
